@@ -106,7 +106,7 @@ def pair_scanner(pair_name, exchange, screener, symbol):
 
             last_trade = time.time()
 
-        time.sleep(10)
+        time.sleep(60)
 
 # ================== BOT START ==================
 def start_bot():
