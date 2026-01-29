@@ -1,144 +1,127 @@
-import time
 import threading
-import logging
-import os
-
-from flask import Flask, render_template, redirect
-from flask_socketio import SocketIO
+import time
+from datetime import datetime
+import requests
+from flask import Flask, render_template
 import telebot
-from telebot import types
-from tradingview_ta import TA_Handler, Interval
+import yfinance as yf
 
-# ================== LOGGING ==================
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(message)s")
-
-# ================== TELEGRAM ==================
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_IDS = ["7928496446", "8519882401"]
-
-bot = telebot.TeleBot(BOT_TOKEN, parse_mode="Markdown")
-
-# ================== FLASK ==================
-app = Flask(__name__)
-socketio = SocketIO(app, cors_allowed_origins="*")
-
-# ================== QUOTEX ==================
+# ================== CONFIGURATION ==================
+BOT_TOKEN = "YOUR_BOT_TOKEN"
+ADMIN_IDS = ["ADMIN_ID_1", "ADMIN_ID_2"]
 QUOTEX_URL = "https://qxbroker.com/en/demo-trade"
 
+# Stickers
 STICKER_UP = "CAACAgUAAxkBAAEQQoZpa36rmJBv1hVxerDLJgt7DfkpDwACPQwAAqDMIFeeI2gdSEWCHDgE"
 STICKER_DOWN = "CAACAgUAAxkBAAEQQohpa36yivOW6VG0gYuWN3nzLS0ndwACXw0AAp2cKVcMqA7Rx02N7zgE"
+STICKER_WIN = "CAACAgUAAxkBAAEQQoppa364FzxNIASmRZkpvYGvdo3l8QACjgwAAjiMQVdc4NyQYU8iNzgE"
+STICKER_LOSS = "CAACAgUAAxkBAAEQQoxpa38lMmyAxq3Rj7DIJz0Sx4CGlgACgh4AAnSoUVd08ZdnRO6rxTgE"
 
-# ================== PAIRS (FIXED) ==================
+bot = telebot.TeleBot(BOT_TOKEN)
+
+# ================== PAIRS ==================
+# Forex (Yahoo) + Crypto (Binance)
 PAIRS = {
-    "EURUSD": ("OANDA", "forex", "EURUSD"),
-    "GBPUSD": ("OANDA", "forex", "GBPUSD"),
-    "USDJPY": ("OANDA", "forex", "USDJPY"),
-    "BTCUSDT": ("BINANCE", "crypto", "BTCUSDT"),
-    "ETHUSDT": ("BINANCE", "crypto", "ETHUSDT"),
+    "EURUSD": {"type":"forex","symbol":"EURUSD=X"},
+    "GBPUSD": {"type":"forex","symbol":"GBPUSD=X"},
+    "USDJPY": {"type":"forex","symbol":"JPY=X"},
+    "AUDUSD": {"type":"forex","symbol":"AUDUSD=X"},
+    "BTCUSDT": {"type":"crypto","symbol":"BTCUSDT"},
+    "ETHUSDT": {"type":"crypto","symbol":"ETHUSDT"},
+    "SOLUSDT": {"type":"crypto","symbol":"SOLUSDT"}
 }
 
-# ================== ANALYSIS (FIXED) ==================
-def get_analysis(symbol, exchange, screener):
+# ================== ANALYSIS ==================
+def get_forex_analysis(symbol):
     try:
-        handler = TA_Handler(
-            symbol=symbol,
-            exchange=exchange,
-            screener=screener,
-            interval=Interval.INTERVAL_1_MINUTE,
-            timeout=20
-        )
+        data = yf.download(symbol, period="1d", interval="1m")
+        last = data.iloc[-1]
+        close = last['Close']
+        open_p = last['Open']
+        high = last['High']
+        low = last['Low']
 
-        analysis = handler.get_analysis()
-        ind = analysis.indicators
+        # Simple RSI calculation (placeholder)
+        delta = close - open_p
+        rsi = 50 + delta*10/close  # simplified
 
-        rsi = ind.get("RSI")
-        close = ind.get("close")
-        open_p = ind.get("open")
-        bb_u = ind.get("BB.upper")
-        bb_l = ind.get("BB.lower")
-
-        if None in (rsi, close, open_p, bb_u, bb_l):
-            return None, 0
-
-        strength = 0
-        if rsi < 45 or rsi > 55:
-            strength += 30
-        if close <= bb_l * 1.002 or close >= bb_u * 0.998:
-            strength += 35
-
+        # Signal logic
         signal = None
-        if strength >= 65:
-            if rsi < 50 and close > open_p:
-                signal = "UP"
-            elif rsi > 50 and close < open_p:
-                signal = "DOWN"
+        if rsi < 50 and close > open_p:
+            signal = "UP"
+        elif rsi > 50 and close < open_p:
+            signal = "DOWN"
+        strength = abs(50-rsi)*2
+        return signal, strength, close
+    except:
+        return None, 0, None
 
-        return signal, strength
+def get_crypto_analysis(symbol):
+    try:
+        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=2"
+        res = requests.get(url).json()
+        last = res[-1]
+        open_p = float(last[1])
+        close = float(last[4])
+        delta = close - open_p
+        rsi = 50 + delta*10/close
+        signal = None
+        if rsi < 50 and close > open_p:
+            signal = "UP"
+        elif rsi > 50 and close < open_p:
+            signal = "DOWN"
+        strength = abs(50-rsi)*2
+        return signal, strength, close
+    except:
+        return None, 0, None
 
-    except Exception as e:
-        logging.warning(f"{symbol} analysis error: {e}")
-        return None, 0
-
-# ================== SCANNER ==================
-def pair_scanner(pair_name, exchange, screener, symbol):
-    last_trade = 0
+# ================== PAIR SCANNER ==================
+def pair_scanner(p_name, p_data):
+    last_trade_time = 0
     while True:
-        print(f"Scanning {pair_name}", flush=True)
+        try:
+            if p_data["type"]=="forex":
+                signal, strength, price = get_forex_analysis(p_data["symbol"])
+            else:
+                signal, strength, price = get_crypto_analysis(p_data["symbol"])
 
-        signal, strength = get_analysis(symbol, exchange, screener)
+            if signal and (time.time() - last_trade_time > 30):
+                direction = "🟢 CALL" if signal=="UP" else "🔴 PUT"
+                markup = telebot.types.InlineKeyboardMarkup()
+                markup.add(telebot.types.InlineKeyboardButton("📲 Open Quotex", url=QUOTEX_URL))
 
-        if signal and time.time() - last_trade > 180:
-            direction = "🟢 CALL" if signal == "UP" else "🔴 PUT"
-            msg = (
-                f"🚀 *QUOTEX SIGNAL*\n"
-                f"━━━━━━━━━━━━━━━\n"
-                f"💎 Asset: `{pair_name}`\n"
-                f"📊 Signal: *{direction}*\n"
-                f"⚡ Strength: `{strength}%`"
-            )
+                msg = f"🚀 *QUOTEX FAST SIGNAL*\n━━━━━━━━━━━━━━━\n💎 Asset: `{p_name}`\n📊 Signal: *{direction}*\n⚡ Strength: `{strength:.1f}%`"
 
-            markup = types.InlineKeyboardMarkup()
-            markup.add(types.InlineKeyboardButton("📲 Open Quotex", url=QUOTEX_URL))
+                for admin in ADMIN_IDS:
+                    bot.send_message(admin, msg, parse_mode="Markdown", reply_markup=markup)
+                    bot.send_sticker(admin, STICKER_UP if signal=="UP" else STICKER_DOWN)
 
-            for admin in ADMIN_IDS:
-                bot.send_message(admin, msg, reply_markup=markup)
-                bot.send_sticker(admin, STICKER_UP if signal == "UP" else STICKER_DOWN)
+                last_trade_time = time.time()
+            time.sleep(60)
+        except Exception as e:
+            print(f"{p_name} analysis error: {e}")
+            time.sleep(60)
 
-            last_trade = time.time()
+# ================== FLASK DASHBOARD ==================
+app = Flask(__name__)
 
-        time.sleep(60)
-
-# ================== BOT START ==================
-def start_bot():
-    time.sleep(3)
-    for admin in ADMIN_IDS:
-        bot.send_message(admin, "🔥 *Signal Booster Online*")
-
-    for pair, (ex, sc, sym) in PAIRS.items():
-        threading.Thread(
-            target=pair_scanner,
-            args=(pair, ex, sc, sym),
-            daemon=True
-        ).start()
-        time.sleep(1)
-
-# ================== ROUTES ==================
 @app.route("/")
-def index():
-    return redirect("/dashboard")
+def home():
+    return "SIGNAL BOOSTER ACTIVE", 200
 
 @app.route("/dashboard")
 def dashboard():
     return render_template("dashboard.html")
 
-# ================== MAIN ==================
-if __name__ == "__main__":
-    start_bot()  # IMPORTANT
-    port = int(os.environ.get("PORT", 10000))
-    socketio.run(
-        app,
-        host="0.0.0.0",
-        port=port,
-        debug=False,
-        allow_unsafe_werkzeug=True
-    )
+# ================== RUN BOT ==================
+def run_bot():
+    time.sleep(5)
+    for admin in ADMIN_IDS:
+        bot.send_message(admin, "🔥 *Signal Booster Online:* Frequency increased. Expecting signals shortly.")
+    for p_name, p_data in PAIRS.items():
+        threading.Thread(target=pair_scanner, args=(p_name, p_data), daemon=True).start()
+        time.sleep(1)
+
+if __name__=="__main__":
+    threading.Thread(target=run_bot, daemon=True).start()
+    app.run(host="0.0.0.0", port=10000)
