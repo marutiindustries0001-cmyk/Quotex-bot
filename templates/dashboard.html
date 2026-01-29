@@ -1,11 +1,26 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<title>Dashboard</title>
+    <meta charset="UTF-8">
+    <title>Signal Dashboard</title>
+    <style>
+        body { font-family: Arial; background:#f4f4f4; }
+        h1 { text-align:center; }
+        table { margin:auto; border-collapse: collapse; width:50%; }
+        th, td { border:1px solid #333; padding:8px; text-align:center; }
+    </style>
 </head>
 <body>
-<h1>Quotex Advanced Signal Dashboard</h1>
-<p>Live signals will appear here.</p>
+    <h1>🚀 Quotex Signal Dashboard</h1>
+    <table>
+        <tr><th>Asset</th><th>Signal</th><th>Strength</th></tr>
+        {% for pair in ["EURUSD","GBPUSD","USDJPY","AUDUSD","BTCUSDT","ETHUSDT","SOLUSDT"] %}
+        <tr>
+            <td>{{ pair }}</td>
+            <td>Pending</td>
+            <td>--</td>
+        </tr>
+        {% endfor %}
+    </table>
 </body>
 </html>
