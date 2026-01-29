@@ -9,16 +9,16 @@ import telebot
 from telebot import types
 from tradingview_ta import TA_Handler, Interval
 
-# ================== BASIC LOGGING ==================
+# ================== LOGGING ==================
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(message)s")
 
-# ================== TELEGRAM CONFIG ==================
-BOT_TOKEN = os.getenv("BOT_TOKEN")  # Render env variable
+# ================== TELEGRAM ==================
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_IDS = ["7928496446", "8519882401"]
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="Markdown")
 
-# ================== FLASK / SOCKET ==================
+# ================== FLASK ==================
 app = Flask(__name__)
 socketio = SocketIO(app, cors_allowed_origins="*")
 
@@ -28,25 +28,26 @@ QUOTEX_URL = "https://qxbroker.com/en/demo-trade"
 STICKER_UP = "CAACAgUAAxkBAAEQQoZpa36rmJBv1hVxerDLJgt7DfkpDwACPQwAAqDMIFeeI2gdSEWCHDgE"
 STICKER_DOWN = "CAACAgUAAxkBAAEQQohpa36yivOW6VG0gYuWN3nzLS0ndwACXw0AAp2cKVcMqA7Rx02N7zgE"
 
-# ================== PAIRS ==================
+# ================== PAIRS (FIXED) ==================
 PAIRS = {
-    "EURUSD": ("FX", "EURUSD"),
-    "GBPUSD": ("FX", "GBPUSD"),
-    "USDJPY": ("FX", "USDJPY"),
-    "BTCUSDT": ("BINANCE", "BTCUSDT"),
-    "ETHUSDT": ("BINANCE", "ETHUSDT"),
+    "EURUSD": ("OANDA", "forex", "EURUSD"),
+    "GBPUSD": ("OANDA", "forex", "GBPUSD"),
+    "USDJPY": ("OANDA", "forex", "USDJPY"),
+    "BTCUSDT": ("BINANCE", "crypto", "BTCUSDT"),
+    "ETHUSDT": ("BINANCE", "crypto", "ETHUSDT"),
 }
 
-# ================== ANALYSIS ==================
-def get_analysis(symbol, exchange):
+# ================== ANALYSIS (FIXED) ==================
+def get_analysis(symbol, exchange, screener):
     try:
         handler = TA_Handler(
             symbol=symbol,
             exchange=exchange,
-            screener="forex" if exchange == "FX" else "crypto",
+            screener=screener,
             interval=Interval.INTERVAL_1_MINUTE,
-            timeout=10
+            timeout=20
         )
+
         analysis = handler.get_analysis()
         ind = analysis.indicators
 
@@ -56,10 +57,13 @@ def get_analysis(symbol, exchange):
         bb_u = ind.get("BB.upper")
         bb_l = ind.get("BB.lower")
 
+        if None in (rsi, close, open_p, bb_u, bb_l):
+            return None, 0
+
         strength = 0
-        if rsi and (rsi < 45 or rsi > 55):
+        if rsi < 45 or rsi > 55:
             strength += 30
-        if close and bb_l and bb_u and (close <= bb_l * 1.002 or close >= bb_u * 0.998):
+        if close <= bb_l * 1.002 or close >= bb_u * 0.998:
             strength += 35
 
         signal = None
@@ -70,16 +74,18 @@ def get_analysis(symbol, exchange):
                 signal = "DOWN"
 
         return signal, strength
+
     except Exception as e:
-        logging.warning(f"{symbol} analysis error")
+        logging.warning(f"{symbol} analysis error: {e}")
         return None, 0
 
 # ================== SCANNER ==================
-def pair_scanner(pair_name, exchange, symbol):
+def pair_scanner(pair_name, exchange, screener, symbol):
     last_trade = 0
     while True:
         print(f"Scanning {pair_name}", flush=True)
-        signal, strength = get_analysis(symbol, exchange)
+
+        signal, strength = get_analysis(symbol, exchange, screener)
 
         if signal and time.time() - last_trade > 180:
             direction = "🟢 CALL" if signal == "UP" else "🔴 PUT"
@@ -105,14 +111,13 @@ def pair_scanner(pair_name, exchange, symbol):
 # ================== BOT START ==================
 def start_bot():
     time.sleep(3)
-
     for admin in ADMIN_IDS:
         bot.send_message(admin, "🔥 *Signal Booster Online*")
 
-    for pair, (ex, sym) in PAIRS.items():
+    for pair, (ex, sc, sym) in PAIRS.items():
         threading.Thread(
             target=pair_scanner,
-            args=(pair, ex, sym),
+            args=(pair, ex, sc, sym),
             daemon=True
         ).start()
         time.sleep(1)
@@ -128,7 +133,7 @@ def dashboard():
 
 # ================== MAIN ==================
 if __name__ == "__main__":
-    start_bot()  # 🔥 IMPORTANT FIX
+    start_bot()  # IMPORTANT
     port = int(os.environ.get("PORT", 10000))
     socketio.run(
         app,
