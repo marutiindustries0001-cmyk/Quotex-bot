@@ -1,5 +1,4 @@
+Flask==2.3.3
+requests==2.31.0
 pyTelegramBotAPI==4.12.0
-tradingview_ta==3.2.10
-flask==2.3.2
-flask_socketio==5.3.6
-eventlet==0.33.3
+yfinance==0.2.26
