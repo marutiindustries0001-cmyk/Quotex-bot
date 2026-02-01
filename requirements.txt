@@ -7,4 +7,4 @@ pytz==2023.3
 requests==2.31.0
 websocket-client==1.6.1
 python-dateutil==2.8.2
-git+https://github.com/achrafelkhnissi/quotex-api.git
+quotex-api==1.0.6
