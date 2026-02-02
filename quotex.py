@@ -1,47 +1,90 @@
+import json
 import time
 import random
+import websocket
 
 class Quotex:
-    def __init__(self, email, password):
+    def __init__(self, email, password, proxies=None):
         self.email = email
         self.password = password
+        self.ws = None
+        self.proxies = proxies  # <-- NOW SUPPORTED
         self.connected = False
 
-    def connect(self):
-        print("🌐 Render-safe mode: Skipping direct WebSocket connection...")
-        time.sleep(2)
-        self.connected = True
-        print("✅ Connection simulated (Render compatible)")
+    def connect(self, max_retries=5):
+        url = "wss://ws2.qxbroker.com/socket.io/?EIO=3&transport=websocket"
+
+        for attempt in range(max_retries):
+            try:
+                print(f"🔐 Connecting to Quotex... (Attempt {attempt+1})")
+
+                # Random human-like delay before connection
+                time.sleep(random.uniform(1.5, 3.5))
+
+                self.ws = websocket.create_connection(url)
+                
+                # Send login packet
+                login_payload = {
+                    "email": self.email,
+                    "password": self.password,
+                    "remember": True
+                }
+
+                self.ws.send(f'42["authorization", {json.dumps(login_payload)}]')
+                time.sleep(2)
+
+                # Read response
+                resp = self.ws.recv()
+                if "success" in resp.lower() or "authorized" in resp.lower():
+                    print("✅ Quotex Login Successful!")
+                    self.connected = True
+                    return True
+                else:
+                    print("⚠️ Login response unclear, retrying...")
+            
+            except Exception as e:
+                print(f"❌ Login attempt failed: {e}")
+                time.sleep(3)
+
+        print("🚫 Failed to connect after retries.")
+        self.connected = False
+        return False
+
+    def ensure_connection(self):
+        """Auto-reconnect if session drops"""
+        if not self.connected or self.ws is None:
+            return self.connect()
         return True
 
-    def check_connect(self):
-        return self.connected
+    def get_candles(self, pair, timeframe, count=60):
+        if not self.ensure_connection():
+            print("⚠️ Cannot fetch candles — not connected.")
+            return None
 
-    def change_balance(self, mode="PRACTICE"):
-        print(f"💰 Balance mode set to: {mode}")
-        return True
+        request = {
+            "name": "get-candles",
+            "args": [pair, timeframe, count, int(time.time())]
+        }
 
-    def get_candles(self, asset, period, count, end):
-        """
-        SAFE DUMMY CANDLES (Prevents crash on Render)
-        Structure same as real Quotex response
-        """
-        data = []
-        base_price = round(random.uniform(1.0000, 1.5000), 4)
+        self.ws.send(f'42{json.dumps(request)}')
+        time.sleep(random.uniform(0.8, 1.5))  # human-like delay
 
-        for i in range(count):
-            open_p = base_price + random.uniform(-0.0005, 0.0005)
-            close_p = open_p + random.uniform(-0.0007, 0.0007)
-            high_p = max(open_p, close_p) + random.uniform(0.0001, 0.0006)
-            low_p = min(open_p, close_p) - random.uniform(0.0001, 0.0006)
+        try:
+            result = self.ws.recv()
+            data = json.loads(result[2:])
 
-            data.append({
-                "open": round(open_p, 4),
-                "close": round(close_p, 4),
-                "high": round(high_p, 4),
-                "low": round(low_p, 4),
-                "from": int(time.time()) - (count-i)*60,
-                "to": int(time.time()) - (count-i-1)*60
-            })
+            candles = []
+            for c in data[1]:
+                candles.append({
+                    "open": c[1],
+                    "close": c[2],
+                    "high": c[3],
+                    "low": c[4],
+                    "time": c[0]
+                })
+            return candles
 
-        return True, data
+        except Exception as e:
+            print(f"❌ Error reading candles for {pair}: {e}")
+            self.connected = False
+            return None
