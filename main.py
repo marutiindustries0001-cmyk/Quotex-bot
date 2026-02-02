@@ -49,7 +49,7 @@ MIN_DELAY = 2
 MAX_DELAY = 7
 
 # ================== QUOTEX CONNECTION (SAFE) ==================
-from quotexapi.stable_api import Quotex
+from quotex import Quotex
 
 class QuotexClient:
     def __init__(self):
