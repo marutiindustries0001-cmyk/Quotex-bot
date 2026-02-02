@@ -1,10 +1,9 @@
-pandas==2.1.1
 numpy==1.25.2
-pytelegrambotapi==4.12.0
-telebot==0.0.4
-pytz==2025.7
-websocket-client==1.6.0
-requests==2.32.0
+pandas==2.1.1
 matplotlib==3.8.0
-flask==2.5.3
+requests==2.32.0
+websocket-client==1.6.0
 python-dotenv==1.0.0
+pytelegrambotapi==4.12.0
+flask==2.5.3
+pytz==2025.2
