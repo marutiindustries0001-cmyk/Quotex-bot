@@ -2,3 +2,8 @@ websocket-client==1.6.4
 requests==2.31.0
 numpy==1.24.3
 pandas==2.0.3
+python-dotenv==1.0.0
+python-dateutil==2.9.0.post0
+pytz==2025.2
+tzdata==2025.3
+six==1.17.0
