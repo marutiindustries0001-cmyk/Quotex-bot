@@ -4,4 +4,4 @@ python-dotenv
 requests
 pandas
 numpy
-https://github.com/achrafelkhnissi/quotex-api/archive/refs/heads/master.zip
+https://github.com/achrafelkhnissi/quotex-api/archive/refs/heads/main.zip
