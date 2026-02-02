@@ -1,6 +1,7 @@
 services:
-  - type: worker
-    name: quotex-signal-bot
+  - type: web
+    name: quotex-bot
     env: python
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: "python main.py"
+    runtime: python-3.11.8
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
