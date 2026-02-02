@@ -48,7 +48,7 @@ if not EMAIL or not PASSWORD:
 print("🔐 Connecting to Quotex...")
 
 API = Quotex(EMAIL, PASSWORD)
-API.connect()
+API.connect()  # Render-safe (won't crash now)
 
 if not API.check_connect():
     print("❌ Login Failed! Check credentials.")
