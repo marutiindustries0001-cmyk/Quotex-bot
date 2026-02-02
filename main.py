@@ -1,146 +1,186 @@
-import os, time, random
-from datetime import datetime, timedelta
+import os
+import time
+import random
+from datetime import datetime, timezone
 import pandas as pd
-from quotexapi.stable_api import Quotex
+import numpy as np
+from dotenv import load_dotenv
 import requests
 
-# ========== ENV VARIABLES (RENDER) ==========
+from quotexapi.api import Quotex
+
+# ================== LOAD ENV ==================
+load_dotenv()
+
 EMAIL = os.getenv("QUOTEX_EMAIL")
 PASSWORD = os.getenv("QUOTEX_PASSWORD")
-TG_TOKEN = os.getenv("TG_TOKEN")
-TG_CHAT = os.getenv("TG_CHAT")
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+PROXY = os.getenv("PROXY")  # Optional
 
-# ========== SETTINGS ==========
-MAX_SIGNALS_PER_HOUR = 6
-SCAN_INTERVAL = 55        # seconds
-CANDLES_M1 = 20
-CANDLES_M5 = 20
-TIMEFRAME_M1 = 60
-TIMEFRAME_M5 = 300
+# ================== TELEGRAM STICKERS ==================
+STICKER_UP = "CAACAgUAAxkBAAEQQoZpa36rmJBv1hVxerDLJgt7DfkpDwACPQwAAqDMIFeeI2gdSEWCHDgE"
+STICKER_DOWN = "CAACAgUAAxkBAAEQQohpa36yivOW6VG0gYuWN3nzLS0ndwACXw0AAp2cKVcMqA7Rx02N7zgE"
+STICKER_ITM = "CAACAgUAAxkBAAEQQoppa364FzxNIASmRZkpvYGvdo3l8QACjgwAAjiMQVdc4NyQYU8iNzgE"
+STICKER_OTM = "CAACAgUAAxkBAAEQQoxpa38lMmyAxq3Rj7DIJz0Sx4CGlgACgh4AAnSoUVd08ZdnRO6rxTgE"
 
+# ================== PAIRS (FULL MAIN + OTC) ==================
 PAIRS = [
-"EURUSD","GBPUSD","USDJPY","AUDUSD","USDCHF","USDCAD","NZDUSD",
-"EURGBP","EURJPY","GBPJPY",
-"EURUSD-OTC","GBPUSD-OTC","USDJPY-OTC","AUDUSD-OTC",
-"USDCHF-OTC","USDCAD-OTC","NZDUSD-OTC","EURGBP-OTC"
+    "EURUSD","GBPUSD","USDJPY","AUDUSD","USDCHF","USDCAD","NZDUSD",
+    "EURGBP","EURJPY","GBPJPY",
+    "EURUSD-OTC","GBPUSD-OTC","USDJPY-OTC","AUDUSD-OTC",
+    "USDCHF-OTC","USDCAD-OTC","NZDUSD-OTC","EURGBP-OTC"
 ]
 
-ITM_STICKER = "🎯"   # change if you want
-OTM_STICKER = "❌"
+# ================== SETTINGS ==================
+MAX_SIGNALS_PER_HOUR = 6
+MTG_STEPS = 1
+NEWS_PAUSE_MINUTES = 10
+SCAN_DELAY = (15, 30)   # human-like delay
+SESSION_RESET_HOURS = 24
 
-q = None
-last_reset = datetime.utcnow()
+last_reset = time.time()
 signals_sent = 0
+hour_start = time.time()
 
-# ========== TELEGRAM ==========
-def tg(msg):
-    if TG_TOKEN and TG_CHAT:
-        url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
-        requests.post(url, json={"chat_id": TG_CHAT, "text": msg})
+# ================== TELEGRAM FUNCTIONS ==================
+def tg_send(text):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": CHAT_ID, "text": text}
+    requests.post(url, json=payload)
 
-def tg_admin(msg):
-    if TG_TOKEN and TG_CHAT:
-        tg("📊 *DASHBOARD*\n" + msg)
+def tg_sticker(sticker_id):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendSticker"
+    payload = {"chat_id": CHAT_ID, "sticker": sticker_id}
+    requests.post(url, json=payload)
 
-# ========== SESSION ==========
-def connect():
-    global q
+# ================== CONNECT QUOTEX ==================
+def connect_quotex():
     print("🔐 Connecting to Quotex...")
-    try:
-        q = Quotex(email=EMAIL, password=PASSWORD)
-        ok, reason = q.connect()
-        if ok:
-            print("✅ Connected to Quotex")
-            return True
-        print("❌ Login failed:", reason)
-    except Exception as e:
-        print("❌ Connection error:", e)
+    api = Quotex(EMAIL, PASSWORD)
 
-    q = None
-    return False
-
-def daily_reset():
-    global last_reset, signals_sent
-    if datetime.utcnow() - last_reset > timedelta(hours=24):
-        print("🔄 Daily session reset")
-        signals_sent = 0
-        last_reset = datetime.utcnow()
-        return True
-    return False
-
-# ========== INDICATORS ==========
-def get_df(pair, tf, n):
-    candles = q.get_candles(pair, tf, n)
-    if not candles:
+    check, reason = api.connect()
+    if not check:
+        print(f"❌ Login failed: {reason}")
         return None
+
+    print("✅ Login Success")
+    return api
+
+API = connect_quotex()
+
+# ================== INDICATORS ==================
+def ma21(series):
+    return series.rolling(21).mean()
+
+def rsi(series, period=14):
+    delta = series.diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.rolling(period).mean()
+    avg_loss = loss.rolling(period).mean()
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
+
+# ================== CANDLE FETCH ==================
+def get_candles(pair, minutes=60):
+    now = int(time.time())
+    candles = API.get_candles(pair, now, 60, minutes)
     df = pd.DataFrame(candles)
     df["close"] = df["close"].astype(float)
     return df
 
-def ma_rsi_signal(pair):
-    df1 = get_df(pair, TIMEFRAME_M1, CANDLES_M1)
-    df5 = get_df(pair, TIMEFRAME_M5, CANDLES_M5)
-    if df1 is None or df5 is None:
+# ================== STRICT STRATEGY (NO RANDOM) ==================
+def analyze_pair(pair):
+    global signals_sent, hour_start
+
+    # Hourly limit reset
+    if time.time() - hour_start > 3600:
+        signals_sent = 0
+        hour_start = time.time()
+
+    if signals_sent >= MAX_SIGNALS_PER_HOUR:
         return None
 
-    df1["ma21"] = df1["close"].rolling(21).mean()
-    delta = df1["close"].diff()
-    gain = delta.clip(lower=0)
-    loss = -delta.clip(upper=0)
-    rs = gain.rolling(14).mean() / loss.rolling(14).mean()
-    df1["rsi"] = 100 - (100 / (1 + rs))
+    df = get_candles(pair, 120)  # 120 candles
+    df["ma21"] = ma21(df["close"])
+    df["rsi"] = rsi(df["close"])
 
-    last = df1.iloc[-1]
-    prev = df1.iloc[-2]
+    last = df.iloc[-1]
+    prev = df.iloc[-2]
 
-    trend_m5 = df5["close"].iloc[-1] > df5["close"].iloc[-5]
+    trend_up = last["close"] > last["ma21"]
+    trend_down = last["close"] < last["ma21"]
+    rsi_ok = 30 < last["rsi"] < 70
 
-    if last["close"] > last["ma21"] and last["rsi"] > 55 and trend_m5:
-        return "CALL"
-    if last["close"] < last["ma21"] and last["rsi"] < 45 and not trend_m5:
-        return "PUT"
+    # ====== STRICT FILTER ======
+    if trend_up and rsi_ok and last["close"] > prev["close"]:
+        return "UP"
+
+    if trend_down and rsi_ok and last["close"] < prev["close"]:
+        return "DOWN"
+
     return None
 
-# ========== MAIN LOOP ==========
-def start_bot():
-    global signals_sent
+# ================== MTG 1-STEP LOGIC ==================
+def check_result(pair, direction):
+    time.sleep(60)  # wait candle close
 
-    print("🚀 V2 PRO Bot Started")
+    df = get_candles(pair, 2)
+    open_price = df.iloc[-2]["open"]
+    close_price = df.iloc[-1]["close"]
 
-    while True:
-        daily_reset()
+    if direction == "UP":
+        return close_price > open_price
+    else:
+        return close_price < open_price
 
-        if not q or not connect():
-            time.sleep(10)
-            continue
+# ================== MAIN LOOP ==================
+print("🚀 Quotex Signal Bot V2 PRO Started")
 
-        for pair in PAIRS:
-            if signals_sent >= MAX_SIGNALS_PER_HOUR:
-                print("⏸️ Signal limit reached, cooling down...")
-                time.sleep(3600)
-                signals_sent = 0
+while True:
+    # Daily session reset
+    if time.time() - last_reset > SESSION_RESET_HOURS * 3600:
+        print("🔄 Daily session reset...")
+        API = connect_quotex()
+        last_reset = time.time()
 
-            try:
-                signal = ma_rsi_signal(pair)
-                if signal:
-                    entry_time = datetime.now().strftime("%H:%M:%S")
-                    msg = (
-f"🔥 SIGNAL\n"
-f"Pair: {pair}\n"
-f"Type: {signal}\n"
-f"TF: M1/M5\n"
-f"Entry: {entry_time}\n"
-f"Expiry: 1 min"
-                    )
-                    tg(msg)
-                    print(msg)
-                    signals_sent += 1
+    for pair in PAIRS:
+        try:
+            signal = analyze_pair(pair)
 
-                # Human-like delay
-                time.sleep(random.randint(3,8))
+            if signal:
+                signals_sent += 1
 
-            except Exception as e:
-                print(f"Error {pair}: {e}")
+                # Send separate message per trade
+                msg = f"📊 Pair: {pair}\n⏱ M1 Setup\n🎯 Signal: {signal}\n🔁 MTG: Use 1 Step if needed"
+                tg_send(msg)
 
-        print("🔁 Next scan...")
-        time.sleep(SCAN_INTERVAL)
+                # Sticker
+                if signal == "UP":
+                    tg_sticker(STICKER_UP)
+                else:
+                    tg_sticker(STICKER_DOWN)
+
+                # ====== RESULT CHECK WITH MTG ======
+                result = check_result(pair, signal)
+
+                if result:
+                    tg_sticker(STICKER_ITM)
+                else:
+                    # 1-step MTG
+                    time.sleep(60)
+                    mtg_result = check_result(pair, signal)
+
+                    if mtg_result:
+                        tg_sticker(STICKER_ITM)
+                    else:
+                        tg_sticker(STICKER_OTM)
+
+            # Human-like delay
+            time.sleep(random.randint(*SCAN_DELAY))
+
+        except Exception as e:
+            print(f"Error analyzing {pair}: {e}")
+            API = connect_quotex()
+
