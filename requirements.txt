@@ -1,8 +1,10 @@
 pandas==2.1.1
 numpy==1.26.5
-telebot==0.0.4
 pytelegrambotapi==4.12.0
+telebot==0.0.4
 pytz==2025.7
 websocket-client==1.6.0
 requests==2.32.0
-quotex-api @ git+https://github.com/achrafelkhnissi/quotex-api.git
+matplotlib==3.8.0
+flask==2.5.3
+python-dotenv==1.0.0
