@@ -1,5 +1,4 @@
 import time
-import json
 import websocket
 import ssl
 
@@ -26,7 +25,6 @@ class Quotex:
         return True  # Dummy for compatibility
 
     def get_candles(self, asset, period, count, end):
-        # Dummy real-time placeholder (prevents crash)
         import pandas as pd
         data = []
         for i in range(count):
