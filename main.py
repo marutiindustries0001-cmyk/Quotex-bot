@@ -1,27 +1,48 @@
 import os
 import time
-import random
 import pytz
-import requests
+import random
+import numpy as np
 import pandas as pd
-from datetime import datetime, timedelta
-from threading import Thread
 import telebot
-from quotexapi.stable_api import Quotex
+from datetime import datetime, timedelta
+from flask import Flask
+from threading import Thread
 
-# ================== 1. CONFIG ==================
+# ================== QUOTEX API ==================
+from quotexapi.stable_api import Quotex  # Vendored locally
+
+# ================== FLASK KEEP-ALIVE ==================
+app = Flask(__name__)
+@app.route("/")
+def home():
+    return "Quotex Sniper Bot: LIVE + OTC | MA21 + Price Action | SAFE MODE"
+
+def run_flask():
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+
+# ================== TELEGRAM ==================
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
-EMAIL = os.environ.get("QUOTEX_EMAIL")
-PASSWORD = os.environ.get("QUOTEX_PASS")
-PROXIES = os.environ.get("QUOTEX_PROXIES", "").split(",")  # comma-separated
-ADMIN_IDS = os.environ.get("ADMIN_IDS", "").split(",")  # comma-separated
+ADMIN_IDS = os.environ.get("ADMIN_IDS", "7928496446").split(",")
+
+bot = telebot.TeleBot(TOKEN, parse_mode="Markdown")
+
+STICKER_UP  = "CAACAgUAAxkBAAEQQoZpa36rmJBv1hVxerDLJgt7DfkpDwACPQwAAqDMIFeeI2gdSEWCHDgE"
+STICKER_DOWN= "CAACAgUAAxkBAAEQQohpa36yivOW6VG0gYuWN3nzLS0ndwACXw0AAp2cKVcMqA7Rx02N7zgE"
+STICKER_ITM = "CAACAgUAAxkBAAEQQoppa364FzxNIASmRZkpvYGvdo3l8QACjgwAAjiMQVdc4NyQYU8iNzgE"
+STICKER_OTM = "CAACAgUAAxkBAAEQQoxpa38lMmyAxq3Rj7DIJz0Sx4CGlgACgh4AAnSoUVd08ZdnRO6rxTgE"
+
 IST = pytz.timezone("Asia/Kolkata")
 
-STICKER_UP   = "CAACAgUAAxkBAAEQQoZpa36rmJBv1hVxerDLJgt7DfkpDwACPQwAAqDMIFeeI2gdSEWCHDgE"
-STICKER_DOWN = "CAACAgUAAxkBAAEQQohpa36yivOW6VG0gYuWN3nzLS0ndwACXw0AAp2cKVcMqA7Rx02N7zgE"
-STICKER_ITM  = "CAACAgUAAxkBAAEQQoppa364FzxNIASmRZkpvYGvdo3l8QACjgwAAjiMQVdc4NyQYU8iNzgE"
-STICKER_OTM  = "CAACAgUAAxkBAAEQQoxpa38lMmyAxq3Rj7DIJz0Sx4CGlgACgh4AAnSoUVd08ZdnRO6rxTgE"
+# ================== QUOTEX LOGIN ==================
+EMAIL = os.environ.get("QUOTEX_EMAIL")
+PASSWORD = os.environ.get("QUOTEX_PASS")
 
+API = Quotex(EMAIL, PASSWORD)
+API.connect()
+API.change_balance("PRACTICE")  # SAFE MODE
+
+# ================== ASSETS ==================
 ALL_PAIRS = [
     "EURUSD","GBPUSD","USDJPY","AUDUSD","USDCAD","EURJPY","GBPJPY","USDCHF",
     "EURGBP","AUDJPY","NZDUSD",
@@ -32,134 +53,104 @@ ALL_PAIRS = [
     "INTEL-OTC","FACEBOOK-OTC","MICROSOFT-OTC","GOOGLE-OTC","APPLE-OTC","AMAZON-OTC"
 ]
 
-bot = telebot.TeleBot(TOKEN, parse_mode="Markdown")
-
-# ================== 2. CONNECT QUOTEX ==================
-def connect_quotex(proxy=None):
-    q = Quotex(EMAIL, PASSWORD)
-    if proxy:
-        q.set_proxy(proxy)
-    q.connect()
-    q.change_balance("PRACTICE")
-    return q
-
-quotex_api = connect_quotex(random.choice(PROXIES) if PROXIES else None)
-
-# ================== 3. HELPERS ==================
-def safe_sleep(min_sec=0.5, max_sec=1.5):
+# ================== HELPERS ==================
+def safe_sleep(min_sec=0.5, max_sec=1.2):
     time.sleep(random.uniform(min_sec, max_sec))
 
 def ensure_connection():
-    global quotex_api
-    if not quotex_api.check_connect():
-        safe_sleep(10, 15)
-        quotex_api = connect_quotex(random.choice(PROXIES) if PROXIES else None)
+    if not API.check_connect():
+        print("⚠️ Reconnecting...")
+        time.sleep(10)
+        API.connect()
+        time.sleep(5)
+        API.change_balance("PRACTICE")
 
-def get_candles(asset, count=60):
-    ensure_connection()
-    _, candles = quotex_api.get_candles(asset, 60, count, time.time())
-    df = pd.DataFrame(candles)
-    df["close"] = df["close"].astype(float)
-    df["open"] = df["open"].astype(float)
-    return df
+def get_candles(asset, minutes=60):
+    try:
+        ensure_connection()
+        safe_sleep()
+        _, candles = API.get_candles(asset, 60, minutes, time.time())
+        df = pd.DataFrame(candles)
+        df["close"] = df["close"].astype(float)
+        df["open"] = df["open"].astype(float)
+        return df
+    except Exception as e:
+        print(f"Candle error: {asset} - {e}")
+        return None
 
-def check_signal(df):
-    if len(df) < 21: return None
+# ================== STRATEGY ==================
+def analyze_asset(asset):
+    df = get_candles(asset, 60)
+    if df is None or len(df) < 21:
+        return None
+
     df["MA21"] = df["close"].rolling(21).mean()
     last = df.iloc[-1]
     prev = df.iloc[-2]
 
-    # CALL
     if last["close"] > last["MA21"] and last["close"] > last["open"] and prev["close"] < prev["open"]:
         return "CALL"
-    # PUT
     if last["close"] < last["MA21"] and last["close"] < last["open"] and prev["close"] > prev["open"]:
         return "PUT"
     return None
 
-# ================== 4. ENGINE ==================
+# ================== ENGINE ==================
 def run_engine():
-    last_reset = datetime.now(IST).date()
-    signal_count = 0
-    MAX_SIGNALS_PER_HOUR = 6
-
+    print("🚀 Engine started (IST)")
     while True:
         now = datetime.now(IST)
-        if now.date() != last_reset:
-            signal_count = 0
-            last_reset = now.date()
-
-        if signal_count >= MAX_SIGNALS_PER_HOUR:
-            safe_sleep(30, 60)
-            continue
-
         trade_time = (now + timedelta(minutes=1)).replace(second=0, microsecond=0)
         send_time = trade_time - timedelta(seconds=40)
+
         while datetime.now(IST) < send_time:
-            safe_sleep(0.3,0.5)
+            time.sleep(0.5)
 
         random.shuffle(ALL_PAIRS)
+
         for asset in ALL_PAIRS:
-            df = get_candles(asset)
-            signal = check_signal(df)
-            if not signal:
-                continue
+            signal = analyze_asset(asset)
+            if signal:
+                t_str = trade_time.strftime("%H:%M")
+                sticker = STICKER_UP if signal=="CALL" else STICKER_DOWN
+                msg = (
+f"🔥 **QUOTEX SNIPER SIGNAL** 🔥\n"
+f"📊 **ASSET** ➪ {asset}\n"
+f"⏰ **ENTRY (IST)** ➪ {t_str}:00\n"
+f"📈 **DIRECTION** ➪ **{signal}**\n"
+f"🔁 MTG: Use 1 Step if needed"
+                )
 
-            # Send Telegram signal
-            t_str = trade_time.strftime("%H:%M")
-            emoji = "🟢 CALL" if signal=="CALL" else "🔴 PUT"
-            sticker = STICKER_UP if signal=="CALL" else STICKER_DOWN
-            msg = (
-f"🔥 **SNIPER SIGNAL** 🔥\n"
-f"━━━━━━━━━━━━━━━━━━\n"
-f"📊 ASSET ➪ {asset}\n"
-f"⏰ ENTRY (IST) ➪ {t_str}:00\n"
-f"📈 DIRECTION ➪ **{emoji}**\n"
-f"⏳ Advance notice ➪ 40s\n"
-f"━━━━━━━━━━━━━━━━━━\n"
-f"🚀 Be Ready!"
-            )
-
-            for cid in ADMIN_IDS:
-                try:
+                for cid in ADMIN_IDS:
                     bot.send_sticker(cid, sticker)
                     bot.send_message(cid, msg)
-                except: pass
 
-            # ===== WAIT FOR TRADE RESULT =====
-            time.sleep(65)
-            df_after = get_candles(asset, 1)
-            last_candle = df_after.iloc[-1]
-            mtg_used = False
-            if (signal=="CALL" and last_candle["close"] > last_candle["open"]) or \
-               (signal=="PUT" and last_candle["close"] < last_candle["open"]):
-                result_msg = f"🎯 **{asset} RESULT: WIN ✅**"
-                sticker_res = STICKER_ITM
-            else:
-                # 1-step MTG
-                mtg_used = True
-                time.sleep(60)
-                df_after_mtg = get_candles(asset, 1)
-                last_candle = df_after_mtg.iloc[-1]
-                if (signal=="CALL" and last_candle["close"] > last_candle["open"]) or \
-                   (signal=="PUT" and last_candle["close"] < last_candle["open"]):
-                    result_msg = f"🔁 MTG: Use 1 Step if needed\n🎯 **{asset} RESULT: WIN ✅**"
-                    sticker_res = STICKER_ITM
+                # Wait for candle to close before checking result
+                time.sleep(65)
+                df_after = get_candles(asset, 1)
+                if df_after is None:
+                    result_msg = f"⚠️ **{asset} RESULT: UNKNOWN**"
                 else:
-                    result_msg = f"❌ **{asset} RESULT: LOSS 🛡️**"
-                    sticker_res = STICKER_OTM
+                    last_candle = df_after.iloc[-1]
+                    if (signal=="CALL" and last_candle["close"]>last_candle["open"]) or \
+                       (signal=="PUT" and last_candle["close"]<last_candle["open"]):
+                        result_msg = f"🎯 **{asset} RESULT: WIN ✅**"
+                        sticker_result = STICKER_ITM
+                    else:
+                        result_msg = f"❌ **{asset} RESULT: LOSS**"
+                        sticker_result = STICKER_OTM
 
-            for cid in ADMIN_IDS:
-                try:
-                    bot.send_sticker(cid, sticker_res)
-                    bot.send_message(cid, result_msg)
-                except: pass
+                    for cid in ADMIN_IDS:
+                        bot.send_sticker(cid, sticker_result)
+                        bot.send_message(cid, result_msg)
 
-            signal_count += 1
-            safe_sleep(120,180)  # cooling between signals
-            break
+                print(f"Trade done: {asset} - {signal}")
+                time.sleep(300)  # 5 min cooldown
+                break
 
-# ================== 5. RUN BOT ==================
-if __name__=="__main__":
+        time.sleep(5)
+
+# ================== RUN BOT ==================
+if __name__ == "__main__":
+    Thread(target=run_flask).start()
     Thread(target=lambda: bot.polling(none_stop=True)).start()
     run_engine()
