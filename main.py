@@ -10,8 +10,8 @@ from datetime import datetime, timedelta
 from flask import Flask
 from threading import Thread
 
-# ---- CHANGE: IQ OPTION REMOVE, LOCAL QUOTEX WRAPPER USE ----
-from quotex import Quotex   # <-- IMPORTANT CHANGE
+# ✅ CORRECT IMPORT (LOCAL SAFE WRAPPER)
+from quotex import Quotex  
 
 # ================== 1. RENDER KEEP-ALIVE SERVER ==================
 app = Flask(__name__)
@@ -23,7 +23,7 @@ def home():
 def run_flask():
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
 
-# ================== 2. TELEGRAM CONFIG (UNCHANGED) ==================
+# ================== 2. TELEGRAM CONFIG ==================
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 if not TOKEN:
     print("❌ ERROR: TELEGRAM_TOKEN not set in Render env variables!")
@@ -37,7 +37,7 @@ STICKER_PUT  = "CAACAgUAAxkBAAEQQohpa36yivOW6VG0gYuWN3nzLS0ndwACXw0AAp2cKVcMqA7R
 
 IST = pytz.timezone("Asia/Kolkata")
 
-# ================== 3. QUOTEX LOGIN (RENDER SAFE) ==================
+# ================== 3. QUOTEX LOGIN ==================
 EMAIL = os.environ.get("QUOTEX_EMAIL")
 PASSWORD = os.environ.get("QUOTEX_PASS")
 
@@ -67,7 +67,7 @@ ALL_PAIRS = [
     "INTEL-OTC","FACEBOOK-OTC","MICROSOFT-OTC","GOOGLE-OTC","APPLE-OTC","AMAZON-OTC"
 ]
 
-# ================== 5. ANTI-BLOCK HELPERS (UNCHANGED) ==================
+# ================== 5. ANTI-BLOCK HELPERS ==================
 def safe_sleep(min_sec=0.4, max_sec=1.2):
     time.sleep(random.uniform(min_sec, max_sec))
 
@@ -79,7 +79,7 @@ def ensure_connection():
         time.sleep(5)
         API.change_balance("PRACTICE")
 
-# ================== 6. GET REAL CANDLES ==================
+# ================== 6. GET CANDLES ==================
 def get_candles(asset, minutes=60):
     try:
         ensure_connection()
@@ -136,7 +136,7 @@ def analyze_asset(asset):
 
     return None, None
 
-# ================== 9. ENGINE (SEQUENTIAL + ANTI-BLOCK) ==================
+# ================== 9. ENGINE ==================
 def run_engine():
     print("🚀 Quotex Sniper Engine Started (IST) — ANTI-BLOCK MODE")
 
