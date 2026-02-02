@@ -46,12 +46,16 @@ def tg_admin(msg):
 def connect():
     global q
     print("🔐 Connecting to Quotex...")
-    q = Quotex(email=EMAIL, password=PASSWORD)
-    ok, reason = q.connect()
-    if ok:
-        print("✅ Connected")
-        return True
-    print("❌ Login failed:", reason)
+    try:
+        q = Quotex(email=EMAIL, password=PASSWORD)
+        ok, reason = q.connect()
+        if ok:
+            print("✅ Connected to Quotex")
+            return True
+        print("❌ Login failed:", reason)
+    except Exception as e:
+        print("❌ Connection error:", e)
+
     q = None
     return False
 
