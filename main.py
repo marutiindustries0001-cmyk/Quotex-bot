@@ -2,7 +2,7 @@ import os, time, random
 from datetime import datetime, timedelta, timezone
 import requests
 import numpy as np
-from quotexapi.stable_api import Quotex
+from websocket import create_connection
 
 # ================== ENV VARIABLES (RENDER) ==================
 QUOTEX_EMAIL = os.getenv("QUOTEX_EMAIL")
@@ -80,11 +80,9 @@ def rsi(prices, period=14):
 
 # ================== LOGIN QUOTEX ==================
 def connect_quotex():
-    q = Quotex(QUOTEX_EMAIL, QUOTEX_PASSWORD)
-    status, _ = q.connect()
-    if not status:
-        raise Exception("❌ Quotex login failed")
-    return q
+    ws = create_connection("wss://ws2.quotex.com/socket.io/?EIO=3&transport=websocket")
+    print("✅ Connected to Quotex WebSocket")
+    return ws
 
 # ================== NEWS FILTER (DUMMY SAFE) ==================
 def is_news_time():
