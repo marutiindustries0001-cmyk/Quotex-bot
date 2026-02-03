@@ -9,12 +9,13 @@ import requests
 # ==================== ENV VARIABLES ====================
 QUOTEX_EMAIL = os.getenv("QUOTEX_EMAIL")
 QUOTEX_PASSWORD = os.getenv("QUOTEX_PASSWORD")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_IDS = [
     os.getenv("TELEGRAM_CHAT_ID1"),
     os.getenv("TELEGRAM_CHAT_ID2")
 ]
 
-if not all([QUOTEX_EMAIL, QUOTEX_PASSWORD] + TELEGRAM_CHAT_IDS):
+if not all([QUOTEX_EMAIL, QUOTEX_PASSWORD, TELEGRAM_BOT_TOKEN] + TELEGRAM_CHAT_IDS):
     raise Exception("❌ Missing one or more environment variables in Render!")
 
 # ==================== STICKERS ====================
@@ -39,11 +40,11 @@ PAIRS = [
 def send_telegram(message, sticker=None):
     for chat_id in TELEGRAM_CHAT_IDS:
         if sticker:
-            requests.post(f"https://api.telegram.org/bot{os.getenv('TELEGRAM_BOT_TOKEN')}/sendSticker", data={
+            requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendSticker", data={
                 "chat_id": chat_id,
                 "sticker": sticker
             })
-        requests.post(f"https://api.telegram.org/bot{os.getenv('TELEGRAM_BOT_TOKEN')}/sendMessage", data={
+        requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", data={
             "chat_id": chat_id,
             "text": message,
             "parse_mode": "HTML"
@@ -54,7 +55,7 @@ def analyze_candle(pair):
         data = q.get_candles(pair=pair, interval=1, count=50)  # M1 candles
         df = pd.DataFrame(data)
         last = df.iloc[-1]
-        # Dummy MA21 + RSI logic
+        # Simple MA21 trend logic
         direction = "call" if last['close'] > df['close'].rolling(21).mean().iloc[-1] else "put"
         return direction
     except Exception as e:
@@ -67,7 +68,12 @@ def main_loop():
             direction = analyze_candle(pair)
             if direction:
                 trade_time = datetime.now().strftime("%H:%M:%S")
-                message = f"📈 Pair: {pair}\n⏰ Trade Time: {trade_time}\n🔹 Signal: {direction.upper()}\n💡 1-step MTG if needed"
+                message = (
+                    f"📈 Pair: {pair}\n"
+                    f"⏰ Trade Time: {trade_time}\n"
+                    f"🔹 Signal: {direction.upper()}\n"
+                    f"💡 1-step MTG if needed"
+                )
                 sticker = STICKER_UP if direction == "call" else STICKER_DOWN
                 send_telegram(message, sticker=sticker)
                 time.sleep(random.randint(35,45))  # 40s approx delay
