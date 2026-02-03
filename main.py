@@ -20,21 +20,21 @@ STICKER_OTM = "CAACAgUAAxkBAAEQQoxpa38lMmyAxq3Rj7DIJz0Sx4CGlgACgh4AAnSoUVd08ZdnR
 
 # ==================== QUOTEX API STARTUP (FIXED) ====================
 q = Quotex(email=QUOTEX_EMAIL, password=QUOTEX_PASSWORD)
-result = q.connect()
+conn_result = q.connect()
 
-# Yahan fix kiya gaya hai:
-if isinstance(result, tuple):
-    check_connect = result[0]
+# Fix: Agar API sirf True/False de ya tuple, dono handle honge
+if isinstance(conn_result, tuple):
+    check_connect = conn_result[0]
 else:
-    check_connect = result
+    check_connect = conn_result
 
 if not check_connect:
-    print("❌ Login Failed! Please check email/password or 2FA.")
+    print("❌ Login Failed! Check Email/Password or 2FA.")
     exit()
 else:
     print("✅ Successfully Connected to Quotex!")
 
-# Updated Pairs List
+# Updated Pairs
 PAIRS = [
     "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCHF", "USDCAD", "NZDUSD",
     "EURGBP", "EURJPY", "GBPJPY", "EURUSD-OTC", "GBPUSD-OTC", "USDJPY-OTC",
@@ -68,9 +68,10 @@ def get_signal(pair):
         return None
 
 def check_result(pair, signal_type):
+    # Wait for candle close
     time.sleep(62) 
     try:
-        candles = q.get_candles(pair, 60, 2, time.time())
+        candles = q.get_candles(pair, 60, 1, time.time())
         open_p = float(candles[0]['open'])
         close_p = float(candles[0]['close'])
         
@@ -83,7 +84,7 @@ def check_result(pair, signal_type):
         return "ERROR"
 
 def main_loop():
-    send_telegram("🚀 <b>Quotex Signal Bot Started ✅</b>\n<i>Connection Stable!</i>")
+    send_telegram("🚀 <b>Quotex Signal Bot Started ✅</b>")
     while True:
         for pair in PAIRS:
             direction = get_signal(pair)
@@ -92,19 +93,22 @@ def main_loop():
                 send_telegram(f"<b>📈 Pair:</b> {pair}\n<b>⏰ Time:</b> {trade_time}\n<b>🔹 Signal:</b> {direction.upper()}", 
                               sticker=(STICKER_UP if direction == "call" else STICKER_DOWN))
                 
+                # First Result
                 result = check_result(pair, direction)
                 
                 if result == "WIN":
                     send_telegram(f"<b>📊 Result {pair}:</b> ITM (Direct) ✅", sticker=STICKER_ITM)
                 elif result == "LOSS":
                     send_telegram(f"<b>⚠️ {pair} Loss! Applying 1-Step MTG...</b>")
+                    # Check MTG Result (next candle)
                     mtg_result = check_result(pair, direction)
                     if mtg_result == "WIN":
                         send_telegram(f"<b>📊 Result {pair}:</b> ITM (MTG-1) ✅", sticker=STICKER_ITM)
                     else:
                         send_telegram(f"<b>📊 Result {pair}:</b> OTM ❌", sticker=STICKER_OTM)
                 
-                time.sleep(10) 
+                # Thoda gap taaki API block na ho
+                time.sleep(random.randint(10, 20)) 
         time.sleep(5)
 
 if __name__ == "__main__":
