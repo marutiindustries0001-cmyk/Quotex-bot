@@ -1,3 +1,5 @@
+import sys
+print(f"🚀 Running on Python: {sys.version}")
 import os, time, random
 from datetime import datetime, timedelta, timezone
 import requests
