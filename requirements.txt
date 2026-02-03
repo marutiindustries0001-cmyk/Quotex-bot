@@ -1,4 +1,3 @@
 websocket-client==1.6.4
 requests==2.31.0
 numpy==1.24.3
-git+https://github.com/sergioapisk/quotex-api.git
