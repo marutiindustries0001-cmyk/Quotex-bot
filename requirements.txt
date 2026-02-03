@@ -1,6 +1,6 @@
-websocket-client==1.6.4
-requests==2.31.0
-numpy==1.24.3
-pandas==2.0.3
-python-dotenv==1.0.0
-git+https://github.com/ericpedra/quotexapi.git
+pandas
+requests
+python-dotenv
+# Note: Ensure you have the 'quotexapi' folder or library installed
+# If it's a specific github repo, you would use:
+# git+https://github.com/path-to-repo/quotexapi.git
