@@ -1,5 +1,5 @@
+flask
 pandas
 requests
-flask
 quotexapi
 python-dotenv
