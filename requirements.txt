@@ -1,6 +1,5 @@
 pandas
 requests
+flask
+quotexapi
 python-dotenv
-# Note: Ensure you have the 'quotexapi' folder or library installed
-# If it's a specific github repo, you would use:
-# git+https://github.com/path-to-repo/quotexapi.git
