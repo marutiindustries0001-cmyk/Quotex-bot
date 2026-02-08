@@ -2,3 +2,4 @@ flask
 pandas
 requests
 python-dotenv
+pytz
