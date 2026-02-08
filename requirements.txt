@@ -1,5 +1,6 @@
 flask
 pandas
 requests
+python-dotenv
 pytz
-quotex-api
+websocket-client
