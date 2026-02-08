@@ -4,3 +4,4 @@ requests
 python-dotenv
 pytz
 websocket-client
+git+https://github.com/nandakishormp/quotexapi.git
