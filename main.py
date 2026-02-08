@@ -14,7 +14,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "<h1>Bot is Running - MONITORING MODE</h1>"
+    return "<h1>Bot is Running - FAST SIGNAL MODE</h1>"
 
 def run_web():
     port = int(os.environ.get("PORT", 10000))
@@ -33,7 +33,6 @@ STICKER_DOWN = "CAACAgUAAxkBAAEQQohpa36yivOW6VG0gYuWN3nzLS0ndwACXw0AAp2cKVcMqA7R
 STICKER_ITM = "CAACAgUAAxkBAAEQQoppa364FzxNIASmRZkpvYGvdo3l8QACjgwAAjiMQVdc4NyQYU8iNzgE"
 STICKER_OTM = "CAACAgUAAxkBAAEQQoxpa38lMmyAxq3Rj7DIJz0Sx4CGlgACgh4AAnSoUVd08ZdnRO6rxTgE"
 
-# Pairs List Thodi Badi Kar di hai taaki chances badh jayein
 OTC_PAIRS = ["EURUSD-OTC", "GBPUSD-OTC", "USDJPY-OTC", "AUDUSD-OTC", "USDCHF-OTC", "USDCAD-OTC", "EURGBP-OTC", "NZDUSD-OTC"]
 REAL_PAIRS = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCHF", "USDCAD", "EURJPY", "GBPJPY"]
 
@@ -41,27 +40,16 @@ def get_active_pairs():
     day = datetime.now(IST).weekday()
     return OTC_PAIRS if day >= 5 else REAL_PAIRS
 
-# ==================== OPTIMIZED STRATEGY ====================
 def calculate_indicators(df):
     df['close'] = pd.to_numeric(df['close'])
-    df['high'] = pd.to_numeric(df['high'])
-    df['low'] = pd.to_numeric(df['low'])
-    
-    # RSI
+    # Fast RSI
     delta = df['close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    gain = (delta.where(delta > 0, 0)).rolling(window=10).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=10).mean()
     rs = gain / (loss + 1e-10)
     df['rsi'] = 100 - (100 / (1 + rs))
-    
+    # Trend
     df['ma21'] = df['close'].rolling(window=21).mean()
-    df['ma20'] = df['close'].rolling(window=20).mean()
-    df['std'] = df['close'].rolling(window=20).std()
-    df['upper_bb'] = df['ma20'] + (df['std'] * 2)
-    df['lower_bb'] = df['ma20'] - (df['std'] * 2)
-    
-    df['resistance'] = df['high'].rolling(window=40).max() # S/R window thoda kam kiya
-    df['support'] = df['low'].rolling(window=40).min()
     return df
 
 def send_msg(text, sticker=None):
@@ -87,7 +75,7 @@ def get_accurate_result(pair, signal_type, q):
 
 # ==================== MAIN ENGINE ====================
 def start_bot():
-    print("🔐 Re-Connecting to Quotex...")
+    print("🔐 Connecting to Quotex...")
     q = Quotex(email=QUOTEX_EMAIL, password=QUOTEX_PASSWORD)
     check, msg = q.connect()
     
@@ -95,7 +83,7 @@ def start_bot():
         print(f"❌ Connection Failed")
         return
 
-    send_msg(f"✅ <b>BOT ACTIVE & SCANNING</b>\n\n🔍 Strategy optimized for more signals.")
+    send_msg(f"✅ <b>BOT ONLINE: FAST SCAN ACTIVE</b>\n\n🎯 <i>Monitoring {len(get_active_pairs())} pairs...</i>")
 
     last_min = None
     is_trading = False
@@ -103,28 +91,22 @@ def start_bot():
     while True:
         now = datetime.now(IST)
         if not is_trading:
-            if 15 <= now.second <= 25 and now.minute != last_min:
+            # Scan thoda pehle shuru kar rahe hain
+            if 10 <= now.second <= 25 and now.minute != last_min:
                 pairs = get_active_pairs()
                 for pair in pairs:
                     try:
-                        candles = q.get_candles(pair, 60, 60, time.time())
+                        candles = q.get_candles(pair, 60, 30, time.time())
                         if not candles: continue
                         df = calculate_indicators(pd.DataFrame(candles))
                         last = df.iloc[-1]
                         
-                        # --- DEBUG LOGS (Render mein dikhega) ---
-                        # print(f"Checking {pair}: Price={last['close']}, RSI={last['rsi']:.2f}, MA21={last['ma21']:.2f}")
-
                         direction = None
-                        
-                        # Thoda relax kiya gaya logic taaki signals milein
-                        if (last['close'] > last['ma21'] and last['rsi'] < 75): # Call (RSI filter thoda badhaya)
-                            if last['close'] < last['resistance']:
-                                direction = "CALL"
-                        
-                        elif (last['close'] < last['ma21'] and last['rsi'] > 25): # Put
-                            if last['close'] > last['support']:
-                                direction = "PUT"
+                        # Aggressive but Safe Logic
+                        if last['close'] > last['ma21'] and last['rsi'] < 80:
+                            direction = "CALL"
+                        elif last['close'] < last['ma21'] and last['rsi'] > 20:
+                            direction = "PUT"
 
                         if direction:
                             is_trading = True
@@ -145,7 +127,7 @@ def start_bot():
                                 else:
                                     send_msg(f"❌ <b>{pair}:</b> LOSS OTM", STICKER_OTM)
                             is_trading = False
-                            break # Ek baar mein ek hi signal
+                            break 
                     except: continue
         time.sleep(1)
 
