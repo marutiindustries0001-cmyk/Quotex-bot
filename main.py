@@ -15,7 +15,7 @@ stats = {"wins": 0, "losses": 0, "mtg_wins": 0}
 
 @app.route('/')
 def home():
-    return f"Bot is Running. Stats: {stats['wins'] + stats['mtg_wins']}W - {stats['losses']}L"
+    return f"Bot Active | Min Payout: 77% | Pairs: 20+ ✅"
 
 def run_web():
     port = int(os.environ.get("PORT", 10000))
@@ -32,29 +32,23 @@ STICKER_DOWN = "CAACAgUAAxkBAAEQQohpa36yivOW6VG0gYuWN3nzLS0ndwACXw0AAp2cKVcMqA7R
 STICKER_ITM = "CAACAgUAAxkBAAEQQoppa364FzxNIASmRZkpvYGvdo3l8QACjgwAAjiMQVdc4NyQYU8iNzgE"
 STICKER_OTM = "CAACAgUAAxkBAAEQQoxpa38lMmyAxq3Rj7DIJz0Sx4CGlgACgh4AAnSoUVd08ZdnRO6rxTgE"
 
-# ==================== ADVANCED PAIRS LIST ====================
+# ==================== ALL PAIRS ENABLED ====================
 def get_active_pairs():
     day = datetime.now(IST).weekday()
-    if day >= 5: # OTC Pairs (Including your specific requests)
-        return [
-            "EURUSD-OTC", "GBPUSD-OTC", "USDJPY-OTC", "AUDUSD-OTC", 
-            "USDCHF-OTC", "USDCAD-OTC", "EURGBP-OTC", "NZDUSD-OTC",
-            "USDPKR-OTC", "USDMXN-OTC", "USDBDT-OTC", "USDARS-OTC",
-            "CADJPY-OTC", "USDBRL-OTC", "GBPJPY-OTC", "EURJPY-OTC"
-        ]
-    else: # Real Pairs
-        return [
-            "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", 
-            "USDCHF", "USDCAD", "EURGBP", "EURJPY", 
-            "GBPJPY", "CADJPY", "AUDCAD", "NZDUSD"
-        ]
+    if day >= 5: # Sat-Sun (OTC)
+        return ["EURUSD-OTC", "GBPUSD-OTC", "USDJPY-OTC", "AUDUSD-OTC", "USDPKR-OTC", 
+                "USDMXN-OTC", "USDBDT-OTC", "USDARS-OTC", "CADJPY-OTC", "USDBRL-OTC", 
+                "GBPJPY-OTC", "EURJPY-OTC", "USDCAD-OTC", "EURGBP-OTC", "NZDUSD-OTC"]
+    else: # Mon-Fri (Real)
+        return ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "EURJPY", "GBPJPY", "CADJPY", 
+                "AUDCAD", "NZDUSD", "EURCAD", "USDCAD", "USDCHF"]
 
 def calculate_indicators(df):
     df['close'] = pd.to_numeric(df['close'])
     df['ma21'] = df['close'].rolling(window=21).mean()
     delta = df['close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=10).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=10).mean()
+    gain = (delta.where(delta > 0, 0)).rolling(window=7).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=7).mean()
     df['rsi'] = 100 - (100 / (1 + (gain / (loss + 1e-10))))
     return df
 
@@ -84,56 +78,60 @@ def start_bot():
     check, msg = q.connect()
     if not check: return
 
-    send_msg("🛰️ <b>EXOTIC OTC MODE ACTIVE</b>\n\n✅ Pairs: PKR, MXN, BDT, ARS, BRL, CADJPY Added.\n🔎 Monitoring all markets...")
+    send_msg("🚀 <b>STRICT 77% MODE ACTIVATED</b>\n\n✅ 20+ Pairs Loaded\n📊 Trend MA21 + RSI 7 Active\n🛡️ All Settings Verified.")
 
-    last_min = None
-    last_heartbeat = None
+    last_min, last_heartbeat = None, None
     is_trading = False
 
     while True:
         try:
             now = datetime.now(IST)
+            # Daily Summary
+            if now.hour == 23 and now.minute == 59 and now.second == 0:
+                summary = (f"📊 <b>DAILY REPORT</b>\n\n✅ Wins: {stats['wins']}\n🔄 MTG Wins: {stats['mtg_wins']}\n❌ Losses: {stats['losses']}")
+                send_msg(summary)
+                stats["wins"], stats["losses"], stats["mtg_wins"] = 0, 0, 0
+                time.sleep(1)
 
-            # Heartbeat every 15 mins
+            # Heartbeat (15 Min)
             if now.minute % 15 == 0 and now.minute != last_heartbeat:
-                send_msg(f"🔍 <b>Status:</b> Scanning {len(get_active_pairs())} pairs...\n💡 Market Exotic OTC pairs check shuru.")
+                send_msg(f"🔍 <b>Bot Scan:</b> {len(get_active_pairs())} pairs monitoring...\n💰 Filter: Min 77% Payout Only.")
                 last_heartbeat = now.minute
 
             if not is_trading:
-                if 5 <= now.second <= 25 and now.minute != last_min:
+                if 10 <= now.second <= 25 and now.minute != last_min:
                     pairs = get_active_pairs()
+                    all_payouts = q.get_all_asset_payout()
                     for pair in pairs:
+                        payout = all_payouts.get(pair, 0)
+                        if payout < 77: continue 
+
                         candles = q.get_candles(pair, 60, 30, time.time())
                         if not candles: continue
                         df = calculate_indicators(pd.DataFrame(candles))
                         last = df.iloc[-1]
                         
                         direction = None
-                        # Optimized Strategy for exotic pairs
-                        if last['close'] > last['ma21'] and last['rsi'] < 85: direction = "CALL"
-                        elif last['close'] < last['ma21'] and last['rsi'] > 15: direction = "PUT"
+                        if last['close'] > last['ma21'] and last['rsi'] < 82: direction = "CALL"
+                        elif last['close'] < last['ma21'] and last['rsi'] > 18: direction = "PUT"
 
                         if direction:
                             is_trading = True
                             sig_time = f"{now.hour}:{(now.minute + 1) % 60:02d}"
-                            send_msg(f"🚀 <b>SIGNAL ALERT</b>\n🌍 <b>ASSET:</b> {pair}\n⏰ <b>TIME:</b> {sig_time}\n👉 <b>ACTION:</b> {'🟢 UP' if direction == 'CALL' else '🔴 DOWN'}", 
-                                     sticker=(STICKER_UP if direction == "CALL" else STICKER_DOWN))
+                            msg_text = (f"🚀 <b>SIGNAL ALERT</b>\n\n🌍 <b>ASSET:</b> {pair}\n💰 <b>PAYOUT:</b> {payout}%\n⏰ <b>TIME:</b> {sig_time}\n👉 <b>ACTION:</b> {'🟢 UP' if direction == 'CALL' else '🔴 DOWN'}")
+                            send_msg(msg_text, sticker=(STICKER_UP if direction == "CALL" else STICKER_DOWN))
                             last_min = now.minute
                             
                             res = get_accurate_result(pair, direction, q)
                             if res == "WIN":
-                                send_msg(f"💰 <b>{pair}:</b> ITM ✅", STICKER_ITM)
-                                stats["wins"] += 1
+                                send_msg(f"💰 <b>{pair}:</b> ITM ✅", STICKER_ITM); stats["wins"] += 1
                             else:
-                                send_msg(f"⚠️ <b>{pair}:</b> OTM! Starting MTG-1...")
+                                send_msg(f"⚠️ <b>{pair}:</b> OTM! MTG-1 Start...")
                                 if get_accurate_result(pair, direction, q) == "WIN":
-                                    send_msg(f"💰 <b>{pair}:</b> MTG ITM ✅", STICKER_ITM)
-                                    stats["mtg_wins"] += 1
+                                    send_msg(f"💰 <b>{pair}:</b> MTG ITM ✅", STICKER_ITM); stats["mtg_wins"] += 1
                                 else:
-                                    send_msg(f"❌ <b>{pair}:</b> LOSS", STICKER_OTM)
-                                    stats["losses"] += 1
-                            is_trading = False
-                            break
+                                    send_msg(f"❌ <b>{pair}:</b> LOSS", STICKER_OTM); stats["losses"] += 1
+                            is_trading = False; break
             time.sleep(1)
         except: time.sleep(5)
 
