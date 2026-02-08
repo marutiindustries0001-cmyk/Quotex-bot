@@ -4,4 +4,5 @@ requests
 python-dotenv
 pytz
 websocket-client
+greenlet>=3.0.0
 quotexpy
