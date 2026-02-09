@@ -27,17 +27,15 @@ def send_msg(text):
 
 def send_sticker(sticker_id):
     if not TELEGRAM_BOT_TOKEN: return
-    time.sleep(1.2)
+    time.sleep(1)
     for cid in CHATS:
         try: requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendSticker", 
                           data={"chat_id": cid, "sticker": sticker_id}, timeout=10)
         except: pass
 
 def get_accurate_result(pair, direction, q):
-    # Perfect Wait for 40s early + 60s candle + 5s buffer
     time.sleep(105) 
     try:
-        # Hamesha current time se data fetch karna taaki sabse latest candle mile
         candles = q.get_candles(pair, 60, 1, time.time())
         if candles:
             o, c = float(candles[0]['open']), float(candles[0]['close'])
@@ -48,20 +46,18 @@ def get_accurate_result(pair, direction, q):
     return "LOSS"
 
 @app.route('/')
-def home(): return "💎 VIP BOT: FULLY OPTIMIZED LIVE ✅"
+def home(): return "💎 VIP BOT: FAST & ACCURATE MODE LIVE ✅"
 
 def start_bot():
     bot_notified = False
     while True:
         try:
-            print(f"DEBUG: Connecting {QUOTEX_EMAIL}...")
             q = Quotex(email=QUOTEX_EMAIL, password=QUOTEX_PASSWORD)
             ok, _ = q.connect()
-            
             if ok:
                 print("DEBUG: LOGIN SUCCESSFUL! 🎉")
                 if not bot_notified:
-                    send_msg("🚀 <b>VIP PREMIUM BOT ONLINE</b> 🚀\n\n✅ Everything Optimized\n✅ Results & Stickers: Guaranteed")
+                    send_msg("🚀 <b>VIP PREMIUM BOT ONLINE</b> 🚀\n\n⚡ Mode: Fast & Accurate\n📊 Pairs: Real + OTC\n🎯 Target: 2 Signals / 10 Min")
                     bot_notified = True
                 
                 last_min = None
@@ -71,6 +67,7 @@ def start_bot():
                     
                     if now.second >= 20 and now.second < 25 and now.minute != last_min:
                         scan_list = [
+                            "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "EURJPY", "USDCAD",
                             "EURUSD-OTC", "GBPUSD-OTC", "USDJPY-OTC", "USDINR-OTC", 
                             "USDBDT-OTC", "EURJPY-OTC", "GBPJPY-OTC", "AUDUSD-OTC",
                             "Boeing-OTC", "Facebook-OTC", "Intel-OTC", "McDonald's-OTC"
@@ -83,25 +80,38 @@ def start_bot():
                                 if not candles: continue
                                 df = pd.DataFrame(candles)
                                 df['close'] = pd.to_numeric(df['close'])
+                                
+                                # Fast Momentum + Trend
+                                df['ma5'] = df['close'].rolling(5).mean()
                                 df['ma21'] = df['close'].rolling(21).mean()
                                 
-                                # Trend checking on LAST CLOSED CANDLE
-                                last_c = df['close'].iloc[-1]
-                                last_m = df['ma21'].iloc[-1]
+                                # RSI
+                                delta = df['close'].diff()
+                                gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+                                loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+                                rsi = 100 - (100 / (1 + (gain / loss)))
                                 
+                                last_c = df['close'].iloc[-1]
+                                last_ma5 = df['ma5'].iloc[-1]
+                                last_ma21 = df['ma21'].iloc[-1]
+                                last_rsi = rsi.iloc[-1]
+
                                 direction = None
-                                if last_c > last_m: direction = "CALL"
-                                elif last_c < last_m: direction = "PUT"
+                                # 🎯 FAST & ACCURATE STRATEGY
+                                # CALL: Price > MA5 AND MA5 > MA21 AND RSI > 50
+                                if last_c > last_ma5 and last_ma5 > last_ma21 and last_rsi > 50:
+                                    direction = "CALL"
+                                # PUT: Price < MA5 AND MA5 < MA21 AND RSI < 50
+                                elif last_c < last_ma5 and last_ma5 < last_ma21 and last_rsi < 50:
+                                    direction = "PUT"
                                 
                                 if direction:
                                     last_min = now.minute
                                     t_time = (now + timedelta(minutes=1)).strftime('%H:%M')
                                     
-                                    # Send Signal
                                     send_msg(f"💎 <b>VIP PREMIUM SIGNAL</b> 💎\n\n━━━━━━━━━━━━━━━\n💵 <b>ASSET  :</b> {pair}\n⏰ <b>TIME   :</b> {t_time}\n📊 <b>SIGNAL :</b> {direction}\n━━━━━━━━━━━━━━━\n⚠️ Use 1-Step MTG if needed")
                                     send_sticker(STICKER_CALL if direction == "CALL" else STICKER_PUT)
                                     
-                                    # Result Check
                                     res = get_accurate_result(pair, direction, q)
                                     if res == "WIN":
                                         send_msg(f"✅ <b>{pair} ITM!!</b>"); send_sticker(STICKER_ITM)
@@ -115,7 +125,8 @@ def start_bot():
                                         else:
                                             send_msg(f"❌ <b>{pair} LOSS</b>"); send_sticker(STICKER_OTM)
                                     
-                                    time.sleep(120); break 
+                                    # Chota break taaki signals ki frequency bani rahe
+                                    time.sleep(30); break 
                             except: continue
                     time.sleep(1)
             else: time.sleep(20)
