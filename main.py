@@ -34,26 +34,27 @@ def send_sticker(sticker_id):
         except: pass
 
 def get_accurate_result(pair, direction, q):
-    # Long wait (115s) for deep server sync
-    print(f"DEBUG: Result checking for {pair}...")
-    time.sleep(115) 
+    # Wait for 1 minute candle + safety sync
+    time.sleep(110)
     try:
-        candles = q.get_candles(pair, 60, 2, time.time())
+        # Get last closed candle
+        candles = q.get_candles(pair, 60, 1, time.time())
         if candles:
-            last_candle = candles[-1]
-            o = round(float(last_candle['open']), 6)
-            c = round(float(last_candle['close']), 6)
-            
-            print(f"DEBUG Result: {pair} | O: {o} C: {c}")
+            o = round(float(candles[0]['open']), 5)
+            c = round(float(candles[0]['close']), 5)
+            print(f"DEBUG Result check for {pair}: O={o}, C={c}, Dir={direction}")
+
             if o == c: return "TIE"
-            if direction == "CALL": return "WIN" if c > o else "LOSS"
-            if direction == "PUT": return "WIN" if c < o else "LOSS"
+            if direction == "CALL":
+                return "WIN" if c > o else "LOSS"
+            if direction == "PUT":
+                return "WIN" if c < o else "LOSS"
     except Exception as e:
         print(f"DEBUG Result Error: {e}")
     return "LOSS"
 
 @app.route('/')
-def home(): return "💎 VIP BOT: STRONG STRATEGY & ACCURATE RESULTS ✅"
+def home(): return "💎 VIP BOT: DIRECTION & RESULT FIXED ✅"
 
 def start_bot():
     bot_notified = False
@@ -63,7 +64,7 @@ def start_bot():
             ok, _ = q.connect()
             if ok:
                 if not bot_notified:
-                    send_msg("💎 <b>VIP PRO-STRATEGY ONLINE</b> 💎\n\n✅ Strong MA+RSI Logic\n✅ Real & OTC Lists Updated\n✅ Focus on Accuracy over Speed")
+                    send_msg("💎 <b>VIP BOT UPDATED (RESULT FIX)</b> 💎\n\n✅ CALL & PUT Balanced\n✅ Accurate Result Check\n✅ Strong Strategy Active")
                     bot_notified = True
                 
                 last_min = None
@@ -80,36 +81,30 @@ def start_bot():
 
                         for pair in scan_list:
                             try:
-                                candles = q.get_candles(pair, 60, 40, time.time())
+                                candles = q.get_candles(pair, 60, 45, time.time())
                                 if not candles or len(candles) < 30: continue
                                 
                                 df = pd.DataFrame(candles)
                                 df['close'] = pd.to_numeric(df['close'])
-                                df['open'] = pd.to_numeric(df['open'])
-                                
-                                # Indicators
                                 df['ma5'] = df['close'].rolling(5).mean()
                                 df['ma21'] = df['close'].rolling(21).mean()
                                 
-                                # RSI 14
+                                # RSI Calculation
                                 delta = df['close'].diff()
                                 gain = (delta.where(delta > 0, 0)).rolling(14).mean()
                                 loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
                                 rsi = 100 - (100 / (1 + (gain / loss)))
                                 
                                 last_c = df['close'].iloc[-1]
-                                last_o = df['open'].iloc[-1]
                                 last_m5 = df['ma5'].iloc[-1]
                                 last_m21 = df['ma21'].iloc[-1]
                                 last_rsi = rsi.iloc[-1]
-                                
-                                body_size = abs(last_c - last_o)
 
                                 direction = None
-                                # 🎯 STRONG LOGIC: TREND + MOMENTUM + RSI + BODY
-                                if last_c > last_m5 and last_m5 > last_m21 and last_rsi > 55 and body_size > 0.00001:
+                                # Balanced Strong Strategy
+                                if last_c > last_m5 and last_m5 > last_m21 and last_rsi > 55:
                                     direction = "CALL"
-                                elif last_c < last_m5 and last_m5 < last_m21 and last_rsi < 45 and body_size > 0.00001:
+                                elif last_c < last_m5 and last_m5 < last_m21 and last_rsi < 45:
                                     direction = "PUT"
                                 
                                 if direction:
@@ -120,6 +115,7 @@ def start_bot():
                                     send_msg(f"💎 <b>VIP PREMIUM SIGNAL</b> 💎\n\n━━━━━━━━━━━━━━━\n💵 <b>ASSET  :</b> {display_name}\n⏰ <b>TIME   :</b> {t_time}\n📊 <b>SIGNAL :</b> {direction}\n━━━━━━━━━━━━━━━")
                                     send_sticker(STICKER_CALL if direction == "CALL" else STICKER_PUT)
                                     
+                                    # Verification
                                     res = get_accurate_result(pair, direction, q)
                                     if res == "WIN":
                                         send_msg(f"✅ <b>{display_name} ITM!!</b>"); send_sticker(STICKER_ITM)
@@ -142,4 +138,4 @@ def start_bot():
 if __name__ == "__main__":
     Thread(target=lambda: app.run(host='0.0.0.0', port=10000), daemon=True).start()
     start_bot()
-    
+                                        
