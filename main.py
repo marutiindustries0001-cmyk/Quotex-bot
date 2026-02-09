@@ -10,7 +10,7 @@ app = Flask(__name__)
 stats = {"wins": 0, "losses": 0, "mtg_wins": 0}
 
 @app.route('/')
-def home(): return "♠️ ULTIMATE BOT ♠️: WEEKEND FILTER ACTIVE ✅"
+def home(): return "♠️ HIGH FREQUENCY BOT ♠️: ACTIVE ✅"
 
 @app.route('/keepalive')
 def keepalive(): return "running"
@@ -55,7 +55,7 @@ def monitor_loop():
         try:
             now = datetime.now(IST)
             if now.minute % 15 == 0 and now.minute != last_h:
-                send_msg(f"💓 <b>STATUS CHECK</b>\n🕒 {now.strftime('%H:%M')} IST\n📡 Bot: Active\n🛡️ Mode: Always Online")
+                send_msg(f"💓 <b>SCANNING STATUS</b>\n🕒 {now.strftime('%H:%M')} IST\n📡 System: Fast Scan Mode\n🚀 Filter: Loose (More Signals)")
                 last_h = now.minute
             if now.hour == 23 and now.minute == 59 and now.second < 10:
                 rep = f"📊 <b>DAILY REPORT</b>\n\n✅ Direct: {stats['wins']}\n🔄 MTG: {stats['mtg_wins']}\n❌ Loss: {stats['losses']}"
@@ -73,24 +73,20 @@ def start_bot():
             if not ok:
                 time.sleep(10); continue
 
-            send_msg("♠️♠️ <b>QUOTEX BOT STARTED</b> ♠️♠️\n\n🚀 <b>Smart Market Filter: ON</b>\n🚀 <b>All Updates Loaded</b>")
+            send_msg("♠️♠️ <b>FAST BOT STARTED</b> ♠️♠️\n\n📈 <b>Signals Frequency: High</b>\n🌍 <b>Market: Real + OTC</b>")
             
             last_min = None
             while True:
                 now = datetime.now(IST)
+                # 40s Advance Window
                 if 18 <= now.second <= 22 and now.minute != last_min:
                     all_payouts = q.get_all_asset_payout()
                     
-                    # Full Pairs Database
-                    real_pairs = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "EURJPY", "GBPJPY", "NZDUSD", "AUDCAD"]
-                    otc_pairs = ["EURUSD-OTC", "GBPUSD-OTC", "USDJPY-OTC", "USDPKR-OTC", "USDBDT-OTC", "USDINR-OTC", "USDBRL-OTC", "USDMXN-OTC", "USDARS-OTC", "USDTRY-OTC", "CADJPY-OTC", "NZDCAD-OTC", "AUDUSD-OTC", "GBPJPY-OTC", "USDCAD-OTC", "CHFJPY-OTC"]
+                    real_p = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "EURJPY", "GBPJPY", "NZDUSD", "AUDCAD"]
+                    otc_p = ["EURUSD-OTC", "GBPUSD-OTC", "USDJPY-OTC", "USDPKR-OTC", "USDBDT-OTC", "USDINR-OTC", "USDBRL-OTC", "USDMXN-OTC", "USDARS-OTC", "USDTRY-OTC", "CADJPY-OTC", "NZDCAD-OTC", "AUDUSD-OTC", "GBPJPY-OTC", "USDCAD-OTC", "CHFJPY-OTC"]
                     
-                    # Day check (0=Mon, 4=Fri, 5=Sat, 6=Sun)
-                    day_of_week = now.weekday()
-                    if day_of_week < 5: # Monday to Friday
-                        scan_list = real_pairs + otc_pairs
-                    else: # Saturday & Sunday
-                        scan_list = otc_pairs
+                    day = now.weekday()
+                    scan_list = (real_p + otc_p) if day < 5 else otc_p
 
                     for pair in scan_list:
                         try:
@@ -107,8 +103,12 @@ def start_bot():
 
                             last, prev = df.iloc[-1], df.iloc[-2]
                             direction = None
-                            if prev['ema5'] <= prev['ema13'] and last['ema5'] > last['ema13'] and last['k'] < 85: direction = "CALL"
-                            elif prev['ema5'] >= prev['ema13'] and last['ema5'] < last['ema13'] and last['k'] > 15: direction = "PUT"
+                            
+                            # LOOSE STOCHASTIC FILTER (95/5 instead of 85/15)
+                            if prev['ema5'] <= prev['ema13'] and last['ema5'] > last['ema13'] and last['k'] < 95: 
+                                direction = "CALL"
+                            elif prev['ema5'] >= prev['ema13'] and last['ema5'] < last['ema13'] and last['k'] > 5: 
+                                direction = "PUT"
 
                             if direction:
                                 last_min = now.minute
