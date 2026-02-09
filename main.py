@@ -10,7 +10,7 @@ app = Flask(__name__)
 stats = {"wins": 0, "losses": 0, "mtg_wins": 0}
 
 @app.route('/')
-def home(): return "💎 VIP BOT: FULLY OPTIMIZED ✅"
+def home(): return "💎 VIP BOT: FULL ASSET SCANNING ✅"
 
 @app.route('/keepalive')
 def keepalive(): return "running"
@@ -52,20 +52,6 @@ def get_accurate_result(pair, direction, q):
         return "LOSS"
     except: return "ERROR"
 
-def monitor_loop():
-    last_h = None
-    while True:
-        try:
-            now = datetime.now(IST)
-            # Daily report at 11:59 PM
-            if now.hour == 23 and now.minute == 59 and now.second < 15:
-                rep = f"📊 <b>DAILY REPORT</b>\n\n✅ Direct ITM: {stats['wins']}\n🔄 MTG ITM: {stats['mtg_wins']}\n❌ Total Loss: {stats['losses']}"
-                send_msg(rep)
-                stats.update({"wins": 0, "losses": 0, "mtg_wins": 0})
-                time.sleep(20)
-        except: pass
-        time.sleep(10)
-
 def start_bot():
     bot_notified = False 
     while True:
@@ -75,7 +61,7 @@ def start_bot():
             
             if ok:
                 if not bot_notified:
-                    send_msg("🚀 <b>VIP BOT ONLINE</b> 🚀\n\n🛡️ Mode: <b>High Accuracy SNR</b>\n📡 Scanning Market...")
+                    send_msg("🚀 <b>VIP BOT ONLINE: FULL SCANNING</b> 🚀\n\n🎯 Assets: <b>32+ Pairs (Live & OTC)</b>\n📡 Search Mode: <b>High Frequency</b>")
                     bot_notified = True
                 
                 last_min = None
@@ -83,26 +69,32 @@ def start_bot():
                     now = datetime.now(IST)
                     if 18 <= now.second <= 25 and now.minute != last_min:
                         all_payouts = q.get_all_asset_payout()
-                        scan_list = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "EURJPY", "GBPJPY", "NZDUSD", "EURUSD-OTC", "GBPUSD-OTC", "USDJPY-OTC", "USDPKR-OTC", "USDBDT-OTC", "USDINR-OTC", "USDBRL-OTC"]
+                        
+                        # SABHI PAIRS WAPAS ADD KAR DIYE
+                        scan_list = [
+                            "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "EURJPY", "GBPJPY", "NZDUSD", "AUDCAD", "USDCAD", "USDCHF",
+                            "EURUSD-OTC", "GBPUSD-OTC", "USDJPY-OTC", "USDPKR-OTC", "USDBDT-OTC", "USDINR-OTC", "USDBRL-OTC", 
+                            "USDTRY-OTC", "CADJPY-OTC", "NZDCAD-OTC", "AUDUSD-OTC", "GBPJPY-OTC", "USDCAD-OTC", "CHFJPY-OTC",
+                            "EURGBP-OTC", "EURAUD-OTC", "USDARS-OTC", "USDMXN-OTC", "USDCOP-OTC", "USDPHP-OTC", "USDIDR-OTC", "USDMYR-OTC"
+                        ]
 
                         for pair in scan_list:
                             try:
                                 if all_payouts.get(pair, 0) < 70: continue
-                                candles = q.get_candles(pair, 60, 50, time.time())
+                                candles = q.get_candles(pair, 60, 100, time.time())
                                 if not candles: continue
                                 
                                 df = pd.DataFrame(candles)
                                 df['close'], df['high'], df['low'] = pd.to_numeric(df['close']), pd.to_numeric(df['high']), pd.to_numeric(df['low'])
-                                df['sma21'] = df['close'].rolling(window=21).mean()
                                 
-                                res_val = df['high'].iloc[-20:-1].max()
-                                sup_val = df['low'].iloc[-20:-1].min()
-                                curr_p, curr_s = df['close'].iloc[-1], df['sma21'].iloc[-1]
+                                # Zone-Based SNR (Last 30 Candles)
+                                resistance = df['high'].iloc[-30:-1].max()
+                                support = df['low'].iloc[-30:-1].min()
+                                curr_p = df['close'].iloc[-1]
                                 
                                 direction = None
-                                # Slightly more sensitive SNR detection
-                                if curr_p <= (sup_val * 1.0005) and curr_p > curr_s: direction = "CALL"
-                                elif curr_p >= (res_val * 0.9995) and curr_p < curr_s: direction = "PUT"
+                                if curr_p <= (support * 1.0008): direction = "CALL"
+                                elif curr_p >= (resistance * 0.9992): direction = "PUT"
 
                                 if direction:
                                     last_min = now.minute
@@ -123,10 +115,9 @@ def start_bot():
                             except: continue
                     time.sleep(1)
             else:
-                time.sleep(30) # Login fail delay
+                time.sleep(30)
         except: time.sleep(10)
 
 if __name__ == "__main__":
     Thread(target=run_web, daemon=True).start()
-    Thread(target=monitor_loop, daemon=True).start() # Thread fixed
     start_bot()
