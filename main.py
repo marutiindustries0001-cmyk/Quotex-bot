@@ -4,7 +4,6 @@ from threading import Thread
 from flask import Flask
 from quotexapi.stable_api import Quotex
 
-# ==================== CONFIGURATION ====================
 IST = pytz.timezone('Asia/Kolkata')
 app = Flask(__name__)
 
@@ -35,105 +34,112 @@ def send_sticker(sticker_id):
         except: pass
 
 def get_accurate_result(pair, direction, q):
-    # Wait: 40s (early alert) + 60s (trade) + 5s (buffer)
-    time.sleep(105) 
+    # Long wait (115s) for deep server sync
+    print(f"DEBUG: Result checking for {pair}...")
+    time.sleep(115) 
     try:
-        candles = q.get_candles(pair, 60, 1, time.time())
+        candles = q.get_candles(pair, 60, 2, time.time())
         if candles:
-            o, c = float(candles[0]['open']), float(candles[0]['close'])
+            last_candle = candles[-1]
+            o = round(float(last_candle['open']), 6)
+            c = round(float(last_candle['close']), 6)
+            
+            print(f"DEBUG Result: {pair} | O: {o} C: {c}")
             if o == c: return "TIE"
             if direction == "CALL": return "WIN" if c > o else "LOSS"
             if direction == "PUT": return "WIN" if c < o else "LOSS"
-    except: pass
+    except Exception as e:
+        print(f"DEBUG Result Error: {e}")
     return "LOSS"
 
 @app.route('/')
-def home(): 
-    print(f"DEBUG: Keep-Alive at {datetime.now(IST)}")
-    return "💎 VIP BOT: SUPER SCAN MODE ACTIVE ✅"
+def home(): return "💎 VIP BOT: STRONG STRATEGY & ACCURATE RESULTS ✅"
 
 def start_bot():
     bot_notified = False
     while True:
         try:
-            print(f"DEBUG: Connecting {QUOTEX_EMAIL}...")
             q = Quotex(email=QUOTEX_EMAIL, password=QUOTEX_PASSWORD)
             ok, _ = q.connect()
-            
             if ok:
-                print("DEBUG: LOGIN SUCCESSFUL! 🎉")
                 if not bot_notified:
-                    send_msg("🚀 <b>VIP BOT ONLINE (ALL PAIRS)</b> 🚀\n\n✅ 30+ Assets Scanning\n✅ Real + OTC + Stocks\n✅ Aggressive Signal Strategy")
+                    send_msg("💎 <b>VIP PRO-STRATEGY ONLINE</b> 💎\n\n✅ Strong MA+RSI Logic\n✅ Real & OTC Lists Updated\n✅ Focus on Accuracy over Speed")
                     bot_notified = True
                 
                 last_min = None
                 while True:
-                    # Connection check fixed
                     now = datetime.now(IST)
-                    
-                    if now.second == 0:
-                        print(f"DEBUG: Heartbeat - {now.strftime('%H:%M:%S')}")
-
                     if now.second >= 20 and now.second < 25 and now.minute != last_min:
-                        # MASSIVE LIST - NO PAIRS REMOVED
-                        scan_list = [
-                            "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "EURJPY", "USDCAD", "EURGBP", "USDCHF",
-                            "EURUSD-OTC", "GBPUSD-OTC", "USDJPY-OTC", "USDINR-OTC", "USDBDT-OTC", "EURJPY-OTC", 
-                            "GBPJPY-OTC", "AUDUSD-OTC", "USDPKR-OTC", "USDBRL-OTC", "EURGBP-OTC", "USDTRY-OTC",
-                            "Boeing-OTC", "Facebook-OTC", "Intel-OTC", "McDonald's-OTC", "Microsoft-OTC", 
-                            "Netflix-OTC", "Visa-OTC", "Apple-OTC", "Google-OTC", "Amazon-OTC"
-                        ]
+                        
+                        REAL_PAIRS = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "EURJPY", "USDCAD", "EURGBP"]
+                        OTC_PAIRS = ["EURUSD_otc", "GBPUSD_otc", "USDJPY_otc", "USDINR_otc", "EURJPY_otc", "GBPJPY_otc", "AUDUSD_otc"]
+                        STOCKS_OTC = ["FACEBOOK_otc", "MICROSOFT_otc", "INTEL_otc", "BOEING_otc", "APPLE_otc", "GOOGLE_otc", "AMAZON_otc"]
+                        
+                        scan_list = REAL_PAIRS + OTC_PAIRS + STOCKS_OTC
                         random.shuffle(scan_list)
 
                         for pair in scan_list:
                             try:
                                 candles = q.get_candles(pair, 60, 40, time.time())
-                                if not candles: continue
+                                if not candles or len(candles) < 30: continue
+                                
                                 df = pd.DataFrame(candles)
                                 df['close'] = pd.to_numeric(df['close'])
+                                df['open'] = pd.to_numeric(df['open'])
+                                
+                                # Indicators
                                 df['ma5'] = df['close'].rolling(5).mean()
                                 df['ma21'] = df['close'].rolling(21).mean()
                                 
+                                # RSI 14
+                                delta = df['close'].diff()
+                                gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+                                loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+                                rsi = 100 - (100 / (1 + (gain / loss)))
+                                
                                 last_c = df['close'].iloc[-1]
+                                last_o = df['open'].iloc[-1]
                                 last_m5 = df['ma5'].iloc[-1]
                                 last_m21 = df['ma21'].iloc[-1]
+                                last_rsi = rsi.iloc[-1]
+                                
+                                body_size = abs(last_c - last_o)
 
                                 direction = None
-                                # Aggressive Mode: Candle must be above/below both MAs
-                                if last_c > last_m5 and last_c > last_m21: direction = "CALL"
-                                elif last_c < last_m5 and last_c < last_m21: direction = "PUT"
+                                # 🎯 STRONG LOGIC: TREND + MOMENTUM + RSI + BODY
+                                if last_c > last_m5 and last_m5 > last_m21 and last_rsi > 55 and body_size > 0.00001:
+                                    direction = "CALL"
+                                elif last_c < last_m5 and last_m5 < last_m21 and last_rsi < 45 and body_size > 0.00001:
+                                    direction = "PUT"
                                 
                                 if direction:
                                     last_min = now.minute
                                     t_time = (now + timedelta(minutes=1)).strftime('%H:%M')
+                                    display_name = pair.replace("_otc", "-OTC").upper()
                                     
-                                    send_msg(f"💎 <b>VIP PREMIUM SIGNAL</b> 💎\n\n━━━━━━━━━━━━━━━\n💵 <b>ASSET  :</b> {pair}\n⏰ <b>TIME   :</b> {t_time}\n📊 <b>SIGNAL :</b> {direction}\n━━━━━━━━━━━━━━━\n⚠️ Use 1-Step MTG if needed")
+                                    send_msg(f"💎 <b>VIP PREMIUM SIGNAL</b> 💎\n\n━━━━━━━━━━━━━━━\n💵 <b>ASSET  :</b> {display_name}\n⏰ <b>TIME   :</b> {t_time}\n📊 <b>SIGNAL :</b> {direction}\n━━━━━━━━━━━━━━━")
                                     send_sticker(STICKER_CALL if direction == "CALL" else STICKER_PUT)
                                     
                                     res = get_accurate_result(pair, direction, q)
                                     if res == "WIN":
-                                        send_msg(f"✅ <b>{pair} ITM!!</b>"); send_sticker(STICKER_ITM)
+                                        send_msg(f"✅ <b>{display_name} ITM!!</b>"); send_sticker(STICKER_ITM)
                                     elif res == "TIE":
-                                        send_msg(f"⚖️ <b>{pair} REFUND (TIE)</b>")
+                                        send_msg(f"⚖️ <b>{display_name} REFUND (TIE)</b>")
                                     else:
                                         send_msg(f"⚠️ <b>OTM - NEXT CANDLE MTG-1</b>")
                                         res_mtg = get_accurate_result(pair, direction, q)
                                         if res_mtg == "WIN":
-                                            send_msg(f"✅ <b>{pair} MTG-1 WIN!!</b>"); send_sticker(STICKER_ITM)
+                                            send_msg(f"✅ <b>{display_name} MTG-1 WIN!!</b>"); send_sticker(STICKER_ITM)
                                         else:
-                                            send_msg(f"❌ <b>{pair} LOSS</b>"); send_sticker(STICKER_OTM)
+                                            send_msg(f"❌ <b>{display_name} LOSS</b>"); send_sticker(STICKER_OTM)
                                     
-                                    time.sleep(10); break 
+                                    time.sleep(15); break 
                             except: continue
                     time.sleep(1)
-            else:
-                print("DEBUG: Connection failed. Retrying...")
-                time.sleep(20)
-        except Exception as e:
-            print(f"DEBUG: Main Error: {e}")
-            time.sleep(10)
+            else: time.sleep(20)
+        except: time.sleep(10)
 
 if __name__ == "__main__":
     Thread(target=lambda: app.run(host='0.0.0.0', port=10000), daemon=True).start()
     start_bot()
-                
+    
