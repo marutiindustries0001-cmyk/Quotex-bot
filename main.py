@@ -4,16 +4,13 @@ from threading import Thread
 from flask import Flask
 from quotexapi.stable_api import Quotex
 
-# ==================== SETTINGS ====================
+# ==================== SETTINGS (FULL VERSION) ====================
 IST = pytz.timezone('Asia/Kolkata')
 app = Flask(__name__)
 stats = {"wins": 0, "losses": 0, "mtg_wins": 0}
 
 @app.route('/')
-def home(): return "♠️ HIGH FREQUENCY BOT ♠️: ACTIVE ✅"
-
-@app.route('/keepalive')
-def keepalive(): return "running"
+def home(): return "♠️ ULTIMATE PRO BOT ♠️: ALL FEATURES RESTORED ✅"
 
 def run_web():
     port = int(os.environ.get("PORT", 10000))
@@ -26,6 +23,8 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHATS = [id for id in [os.getenv("TELEGRAM_CHAT_ID1"), os.getenv("TELEGRAM_CHAT_ID2")] if id]
 
 # Stickers
+STICKER_UP = "CAACAgUAAxkBAAEQQoZpa36rmJBv1hVxerDLJgt7DfkpDwACPQwAAqDMIFeeI2gdSEWCHDgE"
+STICKER_DOWN = "CAACAgUAAxkBAAEQQohpa36yivOW6VG0gYuWN3nzLS0ndwACXw0AAp2cKVcMqA7Rx02N7zgE"
 STICKER_ITM = "CAACAgUAAxkBAAEQQoppa364FzxNIASmRZkpvYGvdo3l8QACjgwAAjiMQVdc4NyQYU8iNzgE"
 STICKER_OTM = "CAACAgUAAxkBAAEQQoxpa38lMmyAxq3Rj7DIJz0Sx4CGlgACgh4AAnSoUVd08ZdnRO6rxTgE"
 
@@ -34,14 +33,15 @@ def send_msg(text, sticker=None):
     for cid in CHATS:
         try:
             requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", 
-                          data={"chat_id": cid, "text": text, "parse_mode": "HTML"}, timeout=12)
+                          data={"chat_id": cid, "text": text, "parse_mode": "HTML"}, timeout=15)
             if sticker:
                 requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendSticker", 
-                              data={"chat_id": cid, "sticker": sticker}, timeout=12)
+                              data={"chat_id": cid, "sticker": sticker}, timeout=15)
         except: pass
 
+# --- Results & MTG Tracker ---
 def get_accurate_result(pair, direction, q):
-    time.sleep(45) 
+    time.sleep(46) 
     try:
         candles = q.get_candles(pair, 60, 1, time.time())
         o, c = float(candles[0]['open']), float(candles[0]['close'])
@@ -49,16 +49,20 @@ def get_accurate_result(pair, direction, q):
         return "LOSS"
     except: return "ERROR"
 
+# --- Status & Report Monitor (Restored) ---
 def monitor_loop():
     last_h = None
     while True:
         try:
             now = datetime.now(IST)
+            # 15-Minute Heartbeat
             if now.minute % 15 == 0 and now.minute != last_h:
-                send_msg(f"💓 <b>SCANNING STATUS</b>\n🕒 {now.strftime('%H:%M')} IST\n📡 System: Fast Scan Mode\n🚀 Filter: Loose (More Signals)")
+                send_msg(f"💓 <b>STATUS CHECK</b>\n🕒 {now.strftime('%H:%M')} IST\n📡 Bot: Active & Scanning\n🛡️ Mode: Monday-Friday (Real+OTC)")
                 last_h = now.minute
+            
+            # Daily Report at 11:59 PM
             if now.hour == 23 and now.minute == 59 and now.second < 10:
-                rep = f"📊 <b>DAILY REPORT</b>\n\n✅ Direct: {stats['wins']}\n🔄 MTG: {stats['mtg_wins']}\n❌ Loss: {stats['losses']}"
+                rep = f"📊 <b>DAILY TRADING SUMMARY</b>\n\n✅ Direct Wins: {stats['wins']}\n🔄 MTG Wins: {stats['mtg_wins']}\n❌ Total Loss: {stats['losses']}"
                 send_msg(rep)
                 stats["wins"], stats["losses"], stats["mtg_wins"] = 0, 0, 0
                 time.sleep(15)
@@ -69,58 +73,56 @@ def start_bot():
     while True:
         try:
             q = Quotex(email=QUOTEX_EMAIL, password=QUOTEX_PASSWORD)
-            ok, _ = q.connect()
+            ok, msg = q.connect()
             if not ok:
-                time.sleep(10); continue
+                send_msg(f"⚠️ <b>Connection Error:</b> {msg}\nRetrying...")
+                time.sleep(20); continue
 
-            send_msg("♠️♠️ <b>FAST BOT STARTED</b> ♠️♠️\n\n📈 <b>Signals Frequency: High</b>\n🌍 <b>Market: Real + OTC</b>")
+            send_msg("♠️♠️ <b>QUOTEX BOT FULLY LOADED</b> ♠️♠️\n\n✅ <b>Advance:</b> 40s Early\n✅ <b>Assets:</b> 30+ (Real/OTC)\n✅ <b>Weekend Filter:</b> Enabled\n✅ <b>Status Monitoring:</b> Active")
             
             last_min = None
             while True:
                 now = datetime.now(IST)
-                # 40s Advance Window
+                # 40s Advance Trigger (18s-22s window)
                 if 18 <= now.second <= 22 and now.minute != last_min:
-                    all_payouts = q.get_all_asset_payout()
+                    all_p = q.get_all_asset_payout()
                     
                     real_p = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "EURJPY", "GBPJPY", "NZDUSD", "AUDCAD"]
                     otc_p = ["EURUSD-OTC", "GBPUSD-OTC", "USDJPY-OTC", "USDPKR-OTC", "USDBDT-OTC", "USDINR-OTC", "USDBRL-OTC", "USDMXN-OTC", "USDARS-OTC", "USDTRY-OTC", "CADJPY-OTC", "NZDCAD-OTC", "AUDUSD-OTC", "GBPJPY-OTC", "USDCAD-OTC", "CHFJPY-OTC"]
                     
-                    day = now.weekday()
-                    scan_list = (real_p + otc_p) if day < 5 else otc_p
+                    scan_list = (real_p + otc_p) if now.weekday() < 5 else otc_p
 
                     for pair in scan_list:
                         try:
-                            if all_payouts.get(pair, 0) < 70: continue
+                            if all_p.get(pair, 0) < 70: continue
                             candles = q.get_candles(pair, 60, 40, time.time())
                             if not candles: continue
                             
-                            df = pd.DataFrame(candles)
-                            df['close'] = pd.to_numeric(df['close'])
+                            df = pd.DataFrame(candles); df['close'] = pd.to_numeric(df['close'])
                             df['ema5'] = df['close'].ewm(span=5, adjust=False).mean()
                             df['ema13'] = df['close'].ewm(span=13, adjust=False).mean()
-                            low_m, high_m = df['low'].rolling(14).min(), df['high'].rolling(14).max()
-                            df['k'] = 100 * ((df['close'] - low_m) / (high_m - low_m + 1e-10))
+                            l, h = df['low'].rolling(14).min(), df['high'].rolling(14).max()
+                            df['k'] = 100 * ((df['close'] - l) / (h - l + 1e-10))
 
                             last, prev = df.iloc[-1], df.iloc[-2]
                             direction = None
-                            
-                            # LOOSE STOCHASTIC FILTER (95/5 instead of 85/15)
-                            if prev['ema5'] <= prev['ema13'] and last['ema5'] > last['ema13'] and last['k'] < 95: 
-                                direction = "CALL"
-                            elif prev['ema5'] >= prev['ema13'] and last['ema5'] < last['ema13'] and last['k'] > 5: 
-                                direction = "PUT"
+                            if prev['ema5'] <= prev['ema13'] and last['ema5'] > last['ema13'] and last['k'] < 85: direction = "CALL"
+                            elif prev['ema5'] >= prev['ema13'] and last['ema5'] < last['ema13'] and last['k'] > 15: direction = "PUT"
 
                             if direction:
                                 last_min = now.minute
-                                trade_time = (now + timedelta(minutes=1)).strftime('%H:%M')
+                                trade_t = (now + timedelta(minutes=1)).strftime('%H:%M')
+                                st_icon = STICKER_UP if direction == "CALL" else STICKER_DOWN
+                                
                                 msg = (f"♠️♠️ <b>Quotex Bot</b> ♠️♠️\n\n"
                                        f"♠️ <b>PAIR</b> 🟰 💲{pair.upper()} ♠️\n"
                                        f"♠️ <b>TIME ZONE</b> 🟰 UTC +5:30 ♠️\n\n"
                                        f"♠️ <b>ONE MINUTE TRADE</b> ♠️\n"
-                                       f"♠️ <b>TRADE TIME</b> ➖ {trade_time} - {direction} ♠️\n\n"
+                                       f"♠️ <b>TRADE TIME</b> ➖ {trade_t} - {direction} ♠️\n\n"
                                        f"♠️ <b>1 TIME MTG</b> ♠️\n\n"
                                        f"♠️♠️ <b>Quotex Bot</b> ♠️♠️")
-                                send_msg(msg)
+                                
+                                send_msg(msg, sticker=st_icon)
                                 
                                 res = get_accurate_result(pair, direction, q)
                                 if res == "WIN":
