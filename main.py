@@ -4,13 +4,13 @@ from threading import Thread
 from flask import Flask
 from quotexapi.stable_api import Quotex
 
-# ==================== SETTINGS ====================
+# ==================== SETTINGS (VERIFIED) ====================
 IST = pytz.timezone('Asia/Kolkata')
 app = Flask(__name__)
 stats = {"wins": 0, "losses": 0, "mtg_wins": 0}
 
 @app.route('/')
-def home(): return "♠️ ULTIMATE PRO ♠️: 100% COMPLETE ✅"
+def home(): return "♠️ VIP PRO BOT ♠️: UI OPTIMIZED ✅"
 
 def run_web():
     port = int(os.environ.get("PORT", 10000))
@@ -40,7 +40,7 @@ def send_msg(text, sticker=None):
         except: pass
 
 def get_accurate_result(pair, direction, q):
-    time.sleep(46) 
+    time.sleep(48) 
     try:
         candles = q.get_candles(pair, 60, 1, time.time())
         o, c = float(candles[0]['open']), float(candles[0]['close'])
@@ -48,44 +48,22 @@ def get_accurate_result(pair, direction, q):
         return "LOSS"
     except: return "ERROR"
 
-def monitor_loop():
-    last_h = None
-    while True:
-        try:
-            now = datetime.now(IST)
-            if now.minute % 15 == 0 and now.minute != last_h:
-                send_msg(f"💓 <b>STATUS CHECK</b>\n🕒 {now.strftime('%H:%M')} IST\n📡 Bot: Scanning 30+ Pairs\n🛡️ Mode: Monday-Friday")
-                last_h = now.minute
-            if now.hour == 23 and now.minute == 59 and now.second < 10:
-                rep = f"📊 <b>SUMMARY</b>\n✅ Wins: {stats['wins']}\n🔄 MTG: {stats['mtg_wins']}\n❌ Loss: {stats['losses']}"
-                send_msg(rep); stats["wins"], stats["losses"], stats["mtg_wins"] = 0, 0, 0
-                time.sleep(15)
-        except: pass
-        time.sleep(10)
-
 def start_bot():
     while True:
         try:
             q = Quotex(email=QUOTEX_EMAIL, password=QUOTEX_PASSWORD)
             ok, msg = q.connect()
-            if not ok:
-                time.sleep(20); continue
+            if not ok: time.sleep(20); continue
 
-            # --- TEST SIGNAL (STILL INCLUDED) ---
-            test_t = (datetime.now(IST) + timedelta(minutes=1)).strftime('%H:%M')
-            send_msg(f"♠️♠️ <b>Quotex Bot (TEST)</b> ♠️♠️\n\n♠️ <b>PAIR</b> 🟰 💲EURUSD-TEST ♠️\n♠️ <b>TIME</b> ➖ {test_t} - CALL ♠️", sticker=STICKER_UP)
-            send_msg("♠️♠️ <b>BOT CONNECTED & LIVE</b> ♠️♠️")
+            send_msg("🚀 <b>VIP BOT ACTIVATED</b> 🚀\n\n💰 <i>High Accuracy Signals Loading...</i>")
             
             last_min = None
             while True:
-                # API Connection Integrity Check (MISSING FEATURE ADDED)
-                if not q.check_connect():
-                    print("Connection lost. Reconnecting..."); break
-
+                if not q.check_connect(): break
                 now = datetime.now(IST)
-                if 18 <= now.second <= 22 and now.minute != last_min:
-                    try:
-                        all_p = q.get_all_asset_payout()
+                
+                if 15 <= now.second <= 25 and now.minute != last_min:
+                    try: all_p = q.get_all_asset_payout()
                     except: all_p = {}
 
                     real_p = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "EURJPY", "GBPJPY", "NZDUSD", "AUDCAD"]
@@ -94,51 +72,53 @@ def start_bot():
 
                     for pair in scan_list:
                         try:
-                            # Strict Payout Filter (MISSING FEATURE FIXED)
-                            payout = all_p.get(pair, 0)
-                            if payout < 70: continue
-
-                            candles = q.get_candles(pair, 60, 40, time.time())
+                            if all_p.get(pair, 0) < 70: continue
+                            candles = q.get_candles(pair, 60, 50, time.time())
                             if not candles: continue
                             
                             df = pd.DataFrame(candles); df['close'] = pd.to_numeric(df['close'])
-                            df['ema5'] = df['close'].ewm(span=5, adjust=False).mean()
-                            df['ema13'] = df['close'].ewm(span=13, adjust=False).mean()
-                            l, h = df['low'].rolling(14).min(), df['high'].rolling(14).max()
-                            df['k'] = 100 * ((df['close'] - l) / (h - l + 1e-10))
-
+                            df['ema_f'] = df['close'].ewm(span=4, adjust=False).mean()
+                            df['ema_s'] = df['close'].ewm(span=10, adjust=False).mean()
+                            delta = df['close'].diff(); gain = (delta.where(delta > 0, 0)).rolling(7).mean(); loss = (-delta.where(delta < 0, 0)).rolling(7).mean()
+                            df['rsi'] = 100 - (100 / (1 + (gain / (loss + 1e-10))))
+                            
                             last, prev = df.iloc[-1], df.iloc[-2]
                             direction = None
-                            if prev['ema5'] <= prev['ema13'] and last['ema5'] > last['ema13'] and last['k'] < 85: direction = "CALL"
-                            elif prev['ema5'] >= prev['ema13'] and last['ema5'] < last['ema13'] and last['k'] > 15: direction = "PUT"
+                            
+                            if prev['ema_f'] <= prev['ema_s'] and last['ema_f'] > last['ema_s'] and last['rsi'] > 50: direction = "CALL"
+                            elif prev['ema_f'] >= prev['ema_s'] and last['ema_f'] < last['ema_s'] and last['rsi'] < 50: direction = "PUT"
 
                             if direction:
                                 last_min = now.minute
                                 trade_t = (now + timedelta(minutes=1)).strftime('%H:%M')
                                 st_icon = STICKER_UP if direction == "CALL" else STICKER_DOWN
-                                msg = (f"♠️♠️ <b>Quotex Bot</b> ♠️♠️\n\n"
-                                       f"♠️ <b>PAIR</b> 🟰 💲{pair.upper()} ♠️\n"
-                                       f"♠️ <b>TRADE TIME</b> ➖ {trade_t} - {direction} ♠️\n\n"
-                                       f"♠️ <b>1 TIME MTG</b> ♠️")
+                                arrow = "⬆️" if direction == "CALL" else "⬇️"
+                                
+                                # 🔥 ATTRACTIVE VIP FORMAT 🔥
+                                msg = (f"👑 <b>PREMIUM SIGNAL</b> 👑\n\n"
+                                       f"💎 <b>ASSET</b> ➬ <code>{pair.upper()}</code>\n"
+                                       f"🕒 <b>TIME</b> ➬ <code>{trade_t} (1 MIN)</code>\n"
+                                       f"🚀 <b>ACTION</b> ➬ <b>{direction} {arrow}</b>\n\n"
+                                       f"⚠️ <i>Use 1-Step MTG if needed</i>\n"
+                                       f"➖➖➖➖➖➖➖➖➖➖\n"
+                                       f"♠️ <b>QUOTEX ULTIMATE</b> ♠️")
+                                
                                 send_msg(msg, sticker=st_icon)
                                 
                                 res = get_accurate_result(pair, direction, q)
                                 if res == "WIN":
-                                    send_msg(f"✅ {pair}: <b>ITM</b>", STICKER_ITM); stats["wins"] += 1
+                                    send_msg(f"✅ <b>PROFIT:</b> {pair}\n🔥 <i>Direct ITM!</i>", STICKER_ITM); stats["wins"] += 1
                                 else:
-                                    send_msg(f"⚠️ OTM! <b>MTG-1 STARTING...</b>")
+                                    send_msg(f"🔄 <b>WAITING:</b> Starting MTG-1...")
                                     if get_accurate_result(pair, direction, q) == "WIN":
-                                        send_msg(f"✅ <b>MTG ITM</b>", STICKER_ITM); stats["mtg_wins"] += 1
+                                        send_msg(f"✅ <b>MTG SUCCESS!</b>\n💰 <i>Recovered & Profit</i>", STICKER_ITM); stats["mtg_wins"] += 1
                                     else:
-                                        send_msg(f"❌ <b>LOSS</b>", STICKER_OTM); stats["losses"] += 1
+                                        send_msg(f"❌ <b>OTM:</b> Skip this pair", STICKER_OTM); stats["losses"] += 1
                                 break
                         except: continue
                 time.sleep(0.5)
-        except Exception as e:
-            print(f"Global Error: {e}")
-            time.sleep(5)
+        except: time.sleep(5)
 
 if __name__ == "__main__":
     Thread(target=run_web, daemon=True).start()
-    Thread(target=monitor_loop, daemon=True).start()
     start_bot()
