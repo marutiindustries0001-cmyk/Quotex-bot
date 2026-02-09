@@ -10,7 +10,7 @@ app = Flask(__name__)
 stats = {"wins": 0, "losses": 0, "mtg_wins": 0}
 
 @app.route('/')
-def home(): return "💎 VIP BOT: STABLE SESSION ✅"
+def home(): return "💎 VIP BOT: FULLY OPTIMIZED ✅"
 
 @app.route('/keepalive')
 def keepalive(): return "running"
@@ -52,8 +52,22 @@ def get_accurate_result(pair, direction, q):
         return "LOSS"
     except: return "ERROR"
 
+def monitor_loop():
+    last_h = None
+    while True:
+        try:
+            now = datetime.now(IST)
+            # Daily report at 11:59 PM
+            if now.hour == 23 and now.minute == 59 and now.second < 15:
+                rep = f"📊 <b>DAILY REPORT</b>\n\n✅ Direct ITM: {stats['wins']}\n🔄 MTG ITM: {stats['mtg_wins']}\n❌ Total Loss: {stats['losses']}"
+                send_msg(rep)
+                stats.update({"wins": 0, "losses": 0, "mtg_wins": 0})
+                time.sleep(20)
+        except: pass
+        time.sleep(10)
+
 def start_bot():
-    bot_notified = False # Welcome message control flag
+    bot_notified = False 
     while True:
         try:
             q = Quotex(email=QUOTEX_EMAIL, password=QUOTEX_PASSWORD)
@@ -67,14 +81,9 @@ def start_bot():
                 last_min = None
                 while q.check_connect():
                     now = datetime.now(IST)
-                    # 40s Advance Scan
                     if 18 <= now.second <= 25 and now.minute != last_min:
                         all_payouts = q.get_all_asset_payout()
-                        
-                        real_p = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "EURJPY", "GBPJPY", "NZDUSD", "AUDCAD"]
-                        otc_p = ["EURUSD-OTC", "GBPUSD-OTC", "USDJPY-OTC", "USDPKR-OTC", "USDBDT-OTC", "USDINR-OTC", "USDBRL-OTC", "USDMXN-OTC", "USDARS-OTC", "USDTRY-OTC", "CADJPY-OTC", "NZDCAD-OTC", "AUDUSD-OTC", "GBPJPY-OTC", "USDCAD-OTC", "CHFJPY-OTC"]
-                        
-                        scan_list = (real_p + otc_p) if now.weekday() < 5 else otc_p
+                        scan_list = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "EURJPY", "GBPJPY", "NZDUSD", "EURUSD-OTC", "GBPUSD-OTC", "USDJPY-OTC", "USDPKR-OTC", "USDBDT-OTC", "USDINR-OTC", "USDBRL-OTC"]
 
                         for pair in scan_list:
                             try:
@@ -91,40 +100,33 @@ def start_bot():
                                 curr_p, curr_s = df['close'].iloc[-1], df['sma21'].iloc[-1]
                                 
                                 direction = None
-                                if curr_p <= (sup_val * 1.0002) and curr_p > curr_s: direction = "CALL"
-                                elif curr_p >= (res_val * 0.9998) and curr_p < curr_s: direction = "PUT"
+                                # Slightly more sensitive SNR detection
+                                if curr_p <= (sup_val * 1.0005) and curr_p > curr_s: direction = "CALL"
+                                elif curr_p >= (res_val * 0.9995) and curr_p < curr_s: direction = "PUT"
 
                                 if direction:
                                     last_min = now.minute
                                     trade_time = (now + timedelta(minutes=1)).strftime('%H:%M')
-                                    
                                     send_msg(f"💰 <b>VIP SIGNAL</b> 💰\n\n💵 <b>ASSET</b>: {pair.upper()}\n⏰ <b>TIME</b>: {trade_time} (1 MIN)\n📊 <b>DIRECTION</b>: {direction}")
                                     send_sticker(STICKER_CALL if direction == "CALL" else STICKER_PUT)
                                     
                                     res = get_accurate_result(pair, direction, q)
                                     if res == "WIN":
-                                        send_msg(f"✅ {pair}: <b>DIRECT ITM</b>")
-                                        send_sticker(STICKER_ITM); stats["wins"] += 1
+                                        send_msg(f"✅ {pair}: <b>DIRECT ITM</b>"); send_sticker(STICKER_ITM); stats["wins"] += 1
                                     else:
                                         send_msg(f"⚠️ <b>OTM! PREPARING MTG-1...</b>")
-                                        res_mtg = get_accurate_result(pair, direction, q)
-                                        if res_mtg == "WIN":
-                                            send_msg(f"✅ <b>MTG-1 ITM</b>")
-                                            send_sticker(STICKER_ITM); stats["mtg_wins"] += 1
+                                        if get_accurate_result(pair, direction, q) == "WIN":
+                                            send_msg(f"✅ <b>MTG-1 ITM</b>"); send_sticker(STICKER_ITM); stats["mtg_wins"] += 1
                                         else:
-                                            send_msg(f"❌ <b>FINAL LOSS</b>")
-                                            send_sticker(STICKER_OTM); stats["losses"] += 1
-                                    
-                                    time.sleep(120) 
-                                    break 
+                                            send_msg(f"❌ <b>FINAL LOSS</b>"); send_sticker(STICKER_OTM); stats["losses"] += 1
+                                    time.sleep(120); break 
                             except: continue
                     time.sleep(1)
             else:
-                # Login failed, wait and retry without spamming
-                time.sleep(20)
-        except Exception as e:
-            time.sleep(10)
+                time.sleep(30) # Login fail delay
+        except: time.sleep(10)
 
 if __name__ == "__main__":
     Thread(target=run_web, daemon=True).start()
+    Thread(target=monitor_loop, daemon=True).start() # Thread fixed
     start_bot()
