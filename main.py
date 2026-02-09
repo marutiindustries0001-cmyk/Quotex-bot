@@ -4,7 +4,6 @@ from threading import Thread
 from flask import Flask
 from quotexapi.stable_api import Quotex
 
-# ==================== CONFIGURATION ====================
 IST = pytz.timezone('Asia/Kolkata')
 app = Flask(__name__)
 
@@ -34,16 +33,18 @@ def send_sticker(sticker_id):
         except: pass
 
 def get_accurate_result(pair, direction, q):
-    time.sleep(50) 
+    time.sleep(70) # Wait for candle close (40s early + 30s actual)
     try:
         candles = q.get_candles(pair, 60, 1, time.time())
-        o, c = float(candles[0]['open']), float(candles[0]['close'])
-        if (direction == "CALL" and c > o) or (direction == "PUT" and c < o): return "WIN"
-        return "LOSS"
+        if candles:
+            o, c = float(candles[0]['open']), float(candles[0]['close'])
+            if (direction == "CALL" and c > o) or (direction == "PUT" and c < o): return "WIN"
+            return "LOSS"
     except: return "ERROR"
+    return "ERROR"
 
 @app.route('/')
-def home(): return "💎 VIP BOT: NO-FILTER MA21 MODE LIVE ✅"
+def home(): return "💎 VIP BOT: FINAL STICKER FLOW ACTIVE ✅"
 
 def start_bot():
     bot_notified = False
@@ -51,54 +52,53 @@ def start_bot():
         try:
             q = Quotex(email=QUOTEX_EMAIL, password=QUOTEX_PASSWORD)
             ok, _ = q.connect()
-            
             if ok:
                 if not bot_notified:
-                    send_msg("🚀 <b>VIP BOT ONLINE: FAST MODE</b> 🚀\n\nAb signals dhada-dhad aayenge!")
+                    send_msg("🚀 <b>VIP PREMIUM BOT ONLINE</b> 🚀\n\n💎 Status: Ready\n📊 Strategy: Strict MA21\n✅ Result Flow: Optimized")
                     bot_notified = True
                 
                 last_min = None
                 while True:
                     now = datetime.now(IST)
-                    # Har minute ki 10th second par scan shuru
-                    if now.second >= 10 and now.minute != last_min:
-                        scan_list = [
-                            "EURUSD-OTC", "GBPUSD-OTC", "USDJPY-OTC", "USDINR-OTC", "USDBDT-OTC", 
-                            "AUDUSD-OTC", "EURJPY-OTC", "GBPJPY-OTC", "USDTRY-OTC"
-                        ]
-
+                    if now.second >= 20 and now.second < 25 and now.minute != last_min:
+                        scan_list = ["EURUSD", "GBPUSD", "USDJPY", "EURUSD-OTC", "GBPUSD-OTC", "USDINR-OTC"]
                         for pair in scan_list:
                             try:
-                                candles = q.get_candles(pair, 60, 40, time.time())
+                                candles = q.get_candles(pair, 60, 50, time.time())
                                 if not candles: continue
-                                
                                 df = pd.DataFrame(candles)
-                                df['close'] = pd.to_numeric(df['close'])
-                                df['ma21'] = df['close'].rolling(window=21).mean()
+                                df['close'] = pd.to_numeric(df['close']); df['ma21'] = df['close'].rolling(21).mean()
+                                delta = df['close'].diff(); gain = delta.where(delta > 0, 0).rolling(14).mean(); loss = -delta.where(delta < 0, 0).rolling(14).mean()
+                                rsi = 100 - (100 / (1 + (gain / loss)))
                                 
-                                curr_price = df['close'].iloc[-1]
-                                curr_ma21 = df['ma21'].iloc[-1]
+                                direction = None
+                                if df['close'].iloc[-1] > df['ma21'].iloc[-1] and rsi.iloc[-1] > 55: direction = "CALL"
+                                elif df['close'].iloc[-1] < df['ma21'].iloc[-1] and rsi.iloc[-1] < 45: direction = "PUT"
                                 
-                                direction = "CALL" if curr_price > curr_ma21 else "PUT"
-                                last_min = now.minute
-                                
-                                # Signal Bhejna
-                                trade_time = (now + timedelta(minutes=1)).strftime('%H:%M')
-                                send_msg(f"💰 <b>VIP SIGNAL</b> 💰\n\n💵 <b>ASSET</b>: {pair.upper()}\n⏰ <b>TIME</b>: {trade_time}\n📊 <b>DIRECTION</b>: {direction}")
-                                send_sticker(STICKER_CALL if direction == "CALL" else STICKER_PUT)
-                                
-                                # Result
-                                res = get_accurate_result(pair, direction, q)
-                                if res == "WIN":
-                                    send_msg(f"✅ {pair}: <b>ITM</b>"); send_sticker(STICKER_ITM)
-                                else:
-                                    send_msg(f"❌ {pair}: <b>OTM (Next signal soon)</b>"); send_sticker(STICKER_OTM)
-                                
-                                time.sleep(10); break # Short break to prevent spam
+                                if direction:
+                                    last_min = now.minute
+                                    trade_time = (now + timedelta(minutes=1)).strftime('%H:%M')
+                                    
+                                    # 1. SIGNAL MESSAGE
+                                    send_msg(f"💎 <b>VIP PREMIUM SIGNAL</b> 💎\n\n━━━━━━━━━━━━━━━\n💵 <b>ASSET  :</b> {pair}\n⏰ <b>TIME   :</b> {trade_time}\n📊 <b>SIGNAL :</b> {direction}\n━━━━━━━━━━━━━━━\n⚠️ Use 1-Step MTG if needed")
+                                    send_sticker(STICKER_CALL if direction == "CALL" else STICKER_PUT)
+                                    
+                                    # 2. RESULT CHECK
+                                    res = get_accurate_result(pair, direction, q)
+                                    if res == "WIN":
+                                        send_msg(f"✅ <b>{pair} ITM!!</b>"); send_sticker(STICKER_ITM)
+                                    else:
+                                        send_msg(f"⚠️ <b>OTM - NEXT CANDLE MTG-1</b>")
+                                        res_mtg = get_accurate_result(pair, direction, q)
+                                        if res_mtg == "WIN":
+                                            send_msg(f"✅ <b>{pair} MTG-1 WIN!!</b>"); send_sticker(STICKER_ITM)
+                                        else:
+                                            send_msg(f"❌ <b>{pair} LOSS</b>"); send_sticker(STICKER_OTM)
+                                    
+                                    time.sleep(200); break 
                             except: continue
                     time.sleep(1)
-            else:
-                time.sleep(30)
+            else: time.sleep(30)
         except: time.sleep(10)
 
 if __name__ == "__main__":
