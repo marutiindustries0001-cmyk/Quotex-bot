@@ -10,7 +10,7 @@ app = Flask(__name__)
 stats = {"wins": 0, "losses": 0, "mtg_wins": 0}
 
 @app.route('/')
-def home(): return "💎 VIP BOT: FULL ASSET SCANNING ✅"
+def home(): return "💎 VIP BOT: POWER SIGNAL MODE ACTIVE ✅"
 
 @app.route('/keepalive')
 def keepalive(): return "running"
@@ -61,16 +61,16 @@ def start_bot():
             
             if ok:
                 if not bot_notified:
-                    send_msg("🚀 <b>VIP BOT ONLINE: FULL SCANNING</b> 🚀\n\n🎯 Assets: <b>32+ Pairs (Live & OTC)</b>\n📡 Search Mode: <b>High Frequency</b>")
+                    send_msg("🚀 <b>VIP BOT ONLINE: SIGNAL BUG FIXED</b> 🚀\n\n🛡️ Strategy: <b>Trend-Zone Reversal</b>\n📡 Scanning 32+ Assets...")
                     bot_notified = True
                 
                 last_min = None
                 while q.check_connect():
                     now = datetime.now(IST)
+                    # 40s advance scan
                     if 18 <= now.second <= 25 and now.minute != last_min:
                         all_payouts = q.get_all_asset_payout()
                         
-                        # SABHI PAIRS WAPAS ADD KAR DIYE
                         scan_list = [
                             "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "EURJPY", "GBPJPY", "NZDUSD", "AUDCAD", "USDCAD", "USDCHF",
                             "EURUSD-OTC", "GBPUSD-OTC", "USDJPY-OTC", "USDPKR-OTC", "USDBDT-OTC", "USDINR-OTC", "USDBRL-OTC", 
@@ -81,20 +81,27 @@ def start_bot():
                         for pair in scan_list:
                             try:
                                 if all_payouts.get(pair, 0) < 70: continue
+                                
+                                # Fresh candle data request
                                 candles = q.get_candles(pair, 60, 100, time.time())
                                 if not candles: continue
                                 
                                 df = pd.DataFrame(candles)
                                 df['close'], df['high'], df['low'] = pd.to_numeric(df['close']), pd.to_numeric(df['high']), pd.to_numeric(df['low'])
                                 
-                                # Zone-Based SNR (Last 30 Candles)
-                                resistance = df['high'].iloc[-30:-1].max()
-                                support = df['low'].iloc[-30:-1].min()
+                                # Indicators
+                                df['sma21'] = df['close'].rolling(window=21).mean()
+                                res_val = df['high'].iloc[-30:-1].max()
+                                sup_val = df['low'].iloc[-30:-1].min()
                                 curr_p = df['close'].iloc[-1]
+                                curr_sma = df['sma21'].iloc[-1]
                                 
                                 direction = None
-                                if curr_p <= (support * 1.0008): direction = "CALL"
-                                elif curr_p >= (resistance * 0.9992): direction = "PUT"
+                                # REFINED LOGIC: SNR Touch + Trend Confirmation
+                                if curr_p <= (sup_val * 1.0015) and curr_p > curr_sma: 
+                                    direction = "CALL"
+                                elif curr_p >= (res_val * 0.9985) and curr_p < curr_sma:
+                                    direction = "PUT"
 
                                 if direction:
                                     last_min = now.minute
