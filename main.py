@@ -4,43 +4,36 @@ from threading import Thread
 from flask import Flask
 from quotexapi.stable_api import Quotex
 
-# ==================== SETTINGS ====================
+# ==================== CONFIGURATION ====================
 IST = pytz.timezone('Asia/Kolkata')
 app = Flask(__name__)
 stats = {"wins": 0, "losses": 0, "mtg_wins": 0}
 
-@app.route('/')
-def home(): return "💎 VIP BOT: FULLY OPERATIONAL ✅"
-
-@app.route('/keepalive')
-def keepalive(): return "running"
-
-def run_web():
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host='0.0.0.0', port=port)
-
-# Env Variables
+# Environment Variables
 QUOTEX_EMAIL = os.getenv("QUOTEX_EMAIL")
 QUOTEX_PASSWORD = os.getenv("QUOTEX_PASSWORD")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHATS = [id for id in [os.getenv("TELEGRAM_CHAT_ID1"), os.getenv("TELEGRAM_CHAT_ID2")] if id]
 
-# Sticker IDs
+# Sticker IDs (Verified)
 STICKER_CALL = "CAACAgUAAxkBAAEQQrFpa4L0pG7vMxyE7AAB_O9y8QACjgwAAjiMQVdc4NyQYU8iNzgE"
 STICKER_PUT = "CAACAgUAAxkBAAEQQrNpa4M1_yAxq3Rj7DIJz0Sx4CGlgACgh4AAnSoUVd08ZdnRO6rxTgE"
 STICKER_ITM = "CAACAgUAAxkBAAEQQoppa364FzxNIASmRZkpvYGvdo3l8QACjgwAAjiMQVdc4NyQYU8iNzgE"
 STICKER_OTM = "CAACAgUAAxkBAAEQQoxpa38lMmyAxq3Rj7DIJz0Sx4CGlgACgh4AAnSoUVd08ZdnRO6rxTgE"
 
-def send_sticker(sticker_id):
-    if not TELEGRAM_BOT_TOKEN: return
-    for cid in CHATS:
-        try: requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendSticker", data={"chat_id": cid, "sticker": sticker_id}, timeout=10)
-        except: pass
-
+# ==================== HELPER FUNCTIONS ====================
 def send_msg(text):
     if not TELEGRAM_BOT_TOKEN: return
     for cid in CHATS:
-        try: requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", data={"chat_id": cid, "text": text, "parse_mode": "HTML"}, timeout=12)
+        try: requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", 
+                          data={"chat_id": cid, "text": text, "parse_mode": "HTML"}, timeout=12)
+        except: pass
+
+def send_sticker(sticker_id):
+    if not TELEGRAM_BOT_TOKEN: return
+    for cid in CHATS:
+        try: requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendSticker", 
+                          data={"chat_id": cid, "sticker": sticker_id}, timeout=10)
         except: pass
 
 def get_accurate_result(pair, direction, q):
@@ -52,23 +45,36 @@ def get_accurate_result(pair, direction, q):
         return "LOSS"
     except: return "ERROR"
 
+# ==================== WEB SERVER ====================
+@app.route('/')
+def home(): return "💎 VIP BOT: LOGGED IN & SCANNING ✅"
+
+@app.route('/keepalive')
+def keepalive(): return "running"
+
+def run_web():
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)
+
+# ==================== MAIN BOT LOGIC ====================
 def start_bot():
-    bot_notified = False 
+    bot_notified = False
     while True:
         try:
             print(f"DEBUG: Attempting login for {QUOTEX_EMAIL}")
             q = Quotex(email=QUOTEX_EMAIL, password=QUOTEX_PASSWORD)
-            ok, _ = q.connect()
+            ok, error_msg = q.connect()
             
             if ok:
+                print("DEBUG: Login SUCCESSFUL!")
                 if not bot_notified:
-                    send_msg("🚀 <b>VIP BOT CONNECTED</b> 🚀\n\n🎯 Assets: <b>32+ Pairs (Live & OTC)</b>\n📡 Scanning Market...")
+                    send_msg("🚀 <b>VIP BOT CONNECTED</b> 🚀\n\n🛡️ Strategy: <b>SNR Zone Reversal</b>\n📡 Scanning 32+ Assets...")
                     bot_notified = True
                 
                 last_min = None
                 while q.check_connect():
                     now = datetime.now(IST)
-                    # 40s advance scan window
+                    # 40s advance scan (20th second)
                     if 18 <= now.second <= 25 and now.minute != last_min:
                         all_payouts = q.get_all_asset_payout()
                         
@@ -88,14 +94,10 @@ def start_bot():
                                 df = pd.DataFrame(candles)
                                 df['close'], df['high'], df['low'] = pd.to_numeric(df['close']), pd.to_numeric(df['high']), pd.to_numeric(df['low'])
                                 
-                                # Trend Indicator
-                                df['sma21'] = df['close'].rolling(window=21).mean()
-                                
                                 # Zone-Based SNR (Last 30 Candles)
                                 resistance = df['high'].iloc[-30:-1].max()
                                 support = df['low'].iloc[-30:-1].min()
                                 curr_p = df['close'].iloc[-1]
-                                curr_sma = df['sma21'].iloc[-1]
                                 
                                 direction = None
                                 # REFINED LOGIC: SNR Zone Touch (1.5% Buffer)
@@ -107,26 +109,35 @@ def start_bot():
                                 if direction:
                                     last_min = now.minute
                                     trade_time = (now + timedelta(minutes=1)).strftime('%H:%M')
+                                    
+                                    # SIGNAL SEND
                                     send_msg(f"💰 <b>VIP SIGNAL</b> 💰\n\n💵 <b>ASSET</b>: {pair.upper()}\n⏰ <b>TIME</b>: {trade_time} (1 MIN)\n📊 <b>DIRECTION</b>: {direction}")
                                     send_sticker(STICKER_CALL if direction == "CALL" else STICKER_PUT)
                                     
+                                    # RESULT CHECK
                                     res = get_accurate_result(pair, direction, q)
                                     if res == "WIN":
-                                        send_msg(f"✅ {pair}: <b>DIRECT ITM</b>"); send_sticker(STICKER_ITM); stats["wins"] += 1
+                                        send_msg(f"✅ {pair}: <b>DIRECT ITM</b>")
+                                        send_sticker(STICKER_ITM); stats["wins"] += 1
                                     else:
                                         send_msg(f"⚠️ <b>OTM! PREPARING MTG-1...</b>")
-                                        if get_accurate_result(pair, direction, q) == "WIN":
-                                            send_msg(f"✅ <b>MTG-1 ITM</b>"); send_sticker(STICKER_ITM); stats["mtg_wins"] += 1
+                                        res_mtg = get_accurate_result(pair, direction, q)
+                                        if res_mtg == "WIN":
+                                            send_msg(f"✅ <b>MTG-1 ITM</b>")
+                                            send_sticker(STICKER_ITM); stats["mtg_wins"] += 1
                                         else:
-                                            send_msg(f"❌ <b>FINAL LOSS</b>"); send_sticker(STICKER_OTM); stats["losses"] += 1
+                                            send_msg(f"❌ <b>FINAL LOSS</b>")
+                                            send_sticker(STICKER_OTM); stats["losses"] += 1
+                                    
                                     time.sleep(120); break 
                             except: continue
                     time.sleep(1)
             else:
-                print("DEBUG: Login failed. Cooling down 60s...")
+                print(f"❌ Login Failed: {error_msg}")
+                # Optional: send_msg(f"⚠️ Login Failed: {error_msg}")
                 time.sleep(60)
         except Exception as e:
-            print(f"DEBUG: Critical Error: {e}")
+            print(f"🔥 Critical Error: {e}")
             time.sleep(20)
 
 if __name__ == "__main__":
