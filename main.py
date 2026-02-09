@@ -10,7 +10,7 @@ app = Flask(__name__)
 stats = {"wins": 0, "losses": 0, "mtg_wins": 0}
 
 @app.route('/')
-def home(): return "💎 VIP BOT: POWER SIGNAL MODE ACTIVE ✅"
+def home(): return "💎 VIP BOT: FULLY OPERATIONAL ✅"
 
 @app.route('/keepalive')
 def keepalive(): return "running"
@@ -56,18 +56,19 @@ def start_bot():
     bot_notified = False 
     while True:
         try:
+            print(f"DEBUG: Attempting login for {QUOTEX_EMAIL}")
             q = Quotex(email=QUOTEX_EMAIL, password=QUOTEX_PASSWORD)
             ok, _ = q.connect()
             
             if ok:
                 if not bot_notified:
-                    send_msg("🚀 <b>VIP BOT ONLINE: SIGNAL BUG FIXED</b> 🚀\n\n🛡️ Strategy: <b>Trend-Zone Reversal</b>\n📡 Scanning 32+ Assets...")
+                    send_msg("🚀 <b>VIP BOT CONNECTED</b> 🚀\n\n🎯 Assets: <b>32+ Pairs (Live & OTC)</b>\n📡 Scanning Market...")
                     bot_notified = True
                 
                 last_min = None
                 while q.check_connect():
                     now = datetime.now(IST)
-                    # 40s advance scan
+                    # 40s advance scan window
                     if 18 <= now.second <= 25 and now.minute != last_min:
                         all_payouts = q.get_all_asset_payout()
                         
@@ -75,32 +76,32 @@ def start_bot():
                             "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "EURJPY", "GBPJPY", "NZDUSD", "AUDCAD", "USDCAD", "USDCHF",
                             "EURUSD-OTC", "GBPUSD-OTC", "USDJPY-OTC", "USDPKR-OTC", "USDBDT-OTC", "USDINR-OTC", "USDBRL-OTC", 
                             "USDTRY-OTC", "CADJPY-OTC", "NZDCAD-OTC", "AUDUSD-OTC", "GBPJPY-OTC", "USDCAD-OTC", "CHFJPY-OTC",
-                            "EURGBP-OTC", "EURAUD-OTC", "USDARS-OTC", "USDMXN-OTC", "USDCOP-OTC", "USDPHP-OTC", "USDIDR-OTC", "USDMYR-OTC"
+                            "EURGBP-OTC", "EURAUD-OTC", "USDARS-OTC", "USDMXN-OTC", "USDCOP-OTC", "USDPHP-OTC", "USDIDR-OTC"
                         ]
 
                         for pair in scan_list:
                             try:
                                 if all_payouts.get(pair, 0) < 70: continue
-                                
-                                # Fresh candle data request
                                 candles = q.get_candles(pair, 60, 100, time.time())
                                 if not candles: continue
                                 
                                 df = pd.DataFrame(candles)
                                 df['close'], df['high'], df['low'] = pd.to_numeric(df['close']), pd.to_numeric(df['high']), pd.to_numeric(df['low'])
                                 
-                                # Indicators
+                                # Trend Indicator
                                 df['sma21'] = df['close'].rolling(window=21).mean()
-                                res_val = df['high'].iloc[-30:-1].max()
-                                sup_val = df['low'].iloc[-30:-1].min()
+                                
+                                # Zone-Based SNR (Last 30 Candles)
+                                resistance = df['high'].iloc[-30:-1].max()
+                                support = df['low'].iloc[-30:-1].min()
                                 curr_p = df['close'].iloc[-1]
                                 curr_sma = df['sma21'].iloc[-1]
                                 
                                 direction = None
-                                # REFINED LOGIC: SNR Touch + Trend Confirmation
-                                if curr_p <= (sup_val * 1.0015) and curr_p > curr_sma: 
+                                # REFINED LOGIC: SNR Zone Touch (1.5% Buffer)
+                                if curr_p <= (support * 1.0015): 
                                     direction = "CALL"
-                                elif curr_p >= (res_val * 0.9985) and curr_p < curr_sma:
+                                elif curr_p >= (resistance * 0.9985):
                                     direction = "PUT"
 
                                 if direction:
@@ -122,8 +123,11 @@ def start_bot():
                             except: continue
                     time.sleep(1)
             else:
-                time.sleep(30)
-        except: time.sleep(10)
+                print("DEBUG: Login failed. Cooling down 60s...")
+                time.sleep(60)
+        except Exception as e:
+            print(f"DEBUG: Critical Error: {e}")
+            time.sleep(20)
 
 if __name__ == "__main__":
     Thread(target=run_web, daemon=True).start()
