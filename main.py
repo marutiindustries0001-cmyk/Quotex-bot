@@ -1,10 +1,9 @@
-import os, time, pandas as pd, requests, pytz
+import os, time, pandas as pd, requests, pytz, random
 from datetime import datetime, timedelta
 from threading import Thread
 from flask import Flask
 from quotexapi.stable_api import Quotex
 
-# ==================== CONFIGURATION ====================
 IST = pytz.timezone('Asia/Kolkata')
 app = Flask(__name__)
 
@@ -28,122 +27,100 @@ def send_msg(text):
 
 def send_sticker(sticker_id):
     if not TELEGRAM_BOT_TOKEN: return
+    time.sleep(1.2)
     for cid in CHATS:
         try: requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendSticker", 
                           data={"chat_id": cid, "sticker": sticker_id}, timeout=10)
         except: pass
 
-def get_accurate_result(pair, direction, q, target_time):
-    """Wait until the target candle closes and check result."""
-    # Target time wo minute hai jab trade khatam honi chahiye
-    while True:
-        now = datetime.now(IST)
-        if now >= target_time + timedelta(seconds=2): # Candle close hone ke 2 sec baad check karein
-            break
-        time.sleep(1)
-        
+def get_accurate_result(pair, direction, q):
+    # Perfect Wait for 40s early + 60s candle + 5s buffer
+    time.sleep(105) 
     try:
-        candles = q.get_candles(pair, 60, 1, int(time.time()))
+        # Hamesha current time se data fetch karna taaki sabse latest candle mile
+        candles = q.get_candles(pair, 60, 1, time.time())
         if candles:
             o, c = float(candles[0]['open']), float(candles[0]['close'])
-            print(f"DEBUG {pair}: O:{o} C:{c}")
-            if (direction == "CALL" and c > o): return "WIN"
-            if (direction == "PUT" and c < o): return "WIN"
             if o == c: return "TIE"
-            return "LOSS"
-    except Exception as e:
-        print(f"Result Error: {e}")
-        return "ERROR"
-    return "ERROR"
+            if direction == "CALL": return "WIN" if c > o else "LOSS"
+            if direction == "PUT": return "WIN" if c < o else "LOSS"
+    except: pass
+    return "LOSS"
 
 @app.route('/')
-def home(): return "💎 VIP BOT: MA21 + RSI STABLE ✅"
+def home(): return "💎 VIP BOT: FULLY OPTIMIZED LIVE ✅"
 
 def start_bot():
     bot_notified = False
     while True:
         try:
-            print("Connecting to Quotex...")
+            print(f"DEBUG: Connecting {QUOTEX_EMAIL}...")
             q = Quotex(email=QUOTEX_EMAIL, password=QUOTEX_PASSWORD)
             ok, _ = q.connect()
+            
             if ok:
+                print("DEBUG: LOGIN SUCCESSFUL! 🎉")
                 if not bot_notified:
-                    send_msg("🚀 <b>VIP PREMIUM BOT ONLINE</b> 🚀\n\n✅ MA21 + RSI Strategy Active\n✅ Timing & Result Logic Fixed")
+                    send_msg("🚀 <b>VIP PREMIUM BOT ONLINE</b> 🚀\n\n✅ Everything Optimized\n✅ Results & Stickers: Guaranteed")
                     bot_notified = True
                 
                 last_min = None
                 while True:
+                    if not q.check_connect(): break
                     now = datetime.now(IST)
                     
-                    # Signal scan: 20th to 25th second of each minute
-                    if 20 <= now.second <= 25 and now.minute != last_min:
-                        scan_list = ["EURUSD", "GBPUSD", "USDJPY", "EURUSD-OTC", "GBPUSD-OTC", "USDINR-OTC", "AUDCAD-OTC"]
-                        
+                    if now.second >= 20 and now.second < 25 and now.minute != last_min:
+                        scan_list = [
+                            "EURUSD-OTC", "GBPUSD-OTC", "USDJPY-OTC", "USDINR-OTC", 
+                            "USDBDT-OTC", "EURJPY-OTC", "GBPJPY-OTC", "AUDUSD-OTC",
+                            "Boeing-OTC", "Facebook-OTC", "Intel-OTC", "McDonald's-OTC"
+                        ]
+                        random.shuffle(scan_list)
+
                         for pair in scan_list:
                             try:
-                                candles = q.get_candles(pair, 60, 100, int(time.time()))
+                                candles = q.get_candles(pair, 60, 50, time.time())
                                 if not candles: continue
-                                
                                 df = pd.DataFrame(candles)
                                 df['close'] = pd.to_numeric(df['close'])
+                                df['ma21'] = df['close'].rolling(21).mean()
                                 
-                                # Indicators
-                                df['ma21'] = df['close'].rolling(window=21).mean()
-                                delta = df['close'].diff()
-                                gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-                                loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-                                df['rsi'] = 100 - (100 / (1 + (gain / loss))).fillna(50)
-
-                                last_close = df['close'].iloc[-1]
-                                last_ma = df['ma21'].iloc[-1]
-                                last_rsi = df['rsi'].iloc[-1]
+                                # Trend checking on LAST CLOSED CANDLE
+                                last_c = df['close'].iloc[-1]
+                                last_m = df['ma21'].iloc[-1]
                                 
                                 direction = None
-                                if last_close > last_ma and last_rsi > 52: direction = "CALL"
-                                elif last_close < last_ma and last_rsi < 48: direction = "PUT"
+                                if last_c > last_m: direction = "CALL"
+                                elif last_c < last_m: direction = "PUT"
                                 
                                 if direction:
                                     last_min = now.minute
-                                    # Trade setup
-                                    signal_minute = now.replace(second=0, microsecond=0)
-                                    trade_start_time = signal_minute + timedelta(minutes=1)
-                                    trade_end_time = trade_start_time + timedelta(minutes=1)
+                                    t_time = (now + timedelta(minutes=1)).strftime('%H:%M')
                                     
-                                    send_msg(f"💎 <b>VIP PREMIUM SIGNAL</b> 💎\n\n━━━━━━━━━━━━━━━\n💵 <b>ASSET  :</b> {pair}\n⏰ <b>TIME   :</b> {trade_start_time.strftime('%H:%M')}\n📊 <b>SIGNAL :</b> {direction}\n━━━━━━━━━━━━━━━")
+                                    # Send Signal
+                                    send_msg(f"💎 <b>VIP PREMIUM SIGNAL</b> 💎\n\n━━━━━━━━━━━━━━━\n💵 <b>ASSET  :</b> {pair}\n⏰ <b>TIME   :</b> {t_time}\n📊 <b>SIGNAL :</b> {direction}\n━━━━━━━━━━━━━━━\n⚠️ Use 1-Step MTG if needed")
                                     send_sticker(STICKER_CALL if direction == "CALL" else STICKER_PUT)
                                     
-                                    # Wait and check Direct result
-                                    res = get_accurate_result(pair, direction, q, trade_end_time)
-                                    
+                                    # Result Check
+                                    res = get_accurate_result(pair, direction, q)
                                     if res == "WIN":
-                                        send_msg(f"✅ <b>{pair} DIRECT ITM!!</b>"); send_sticker(STICKER_ITM)
+                                        send_msg(f"✅ <b>{pair} ITM!!</b>"); send_sticker(STICKER_ITM)
                                     elif res == "TIE":
                                         send_msg(f"⚖️ <b>{pair} REFUND (TIE)</b>")
                                     else:
-                                        # MTG Logic
-                                        mtg_end_time = trade_end_time + timedelta(minutes=1)
-                                        send_msg(f"⚠️ <b>{pair} OTM - PREPARING MTG-1...</b>")
-                                        
-                                        res_mtg = get_accurate_result(pair, direction, q, mtg_end_time)
+                                        send_msg(f"⚠️ <b>OTM - NEXT CANDLE MTG-1</b>")
+                                        res_mtg = get_accurate_result(pair, direction, q)
                                         if res_mtg == "WIN":
                                             send_msg(f"✅ <b>{pair} MTG-1 WIN!!</b>"); send_sticker(STICKER_ITM)
-                                        elif res_mtg == "TIE":
-                                            send_msg(f"⚖️ <b>{pair} MTG REFUND</b>")
                                         else:
                                             send_msg(f"❌ <b>{pair} LOSS</b>"); send_sticker(STICKER_OTM)
                                     
-                                    # Break to avoid multiple signals in same minute
-                                    break 
+                                    time.sleep(120); break 
                             except: continue
                     time.sleep(1)
-            else:
-                print("Login failed. Retrying...")
-                time.sleep(20)
-        except Exception as e:
-            print(f"Bot Error: {e}")
-            time.sleep(10)
+            else: time.sleep(20)
+        except: time.sleep(10)
 
 if __name__ == "__main__":
-    # Web server thread
-    Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000))), daemon=True).start()
+    Thread(target=lambda: app.run(host='0.0.0.0', port=10000), daemon=True).start()
     start_bot()
