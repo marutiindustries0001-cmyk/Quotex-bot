@@ -4,13 +4,13 @@ from threading import Thread
 from flask import Flask
 from quotexapi.stable_api import Quotex
 
-# ==================== SETTINGS (FULL VERSION) ====================
+# ==================== SETTINGS ====================
 IST = pytz.timezone('Asia/Kolkata')
 app = Flask(__name__)
 stats = {"wins": 0, "losses": 0, "mtg_wins": 0}
 
 @app.route('/')
-def home(): return "♠️ ULTIMATE PRO BOT ♠️: ALL FEATURES RESTORED ✅"
+def home(): return "♠️ ULTIMATE PRO BOT ♠️: TEST MODE ACTIVE ✅"
 
 def run_web():
     port = int(os.environ.get("PORT", 10000))
@@ -39,7 +39,6 @@ def send_msg(text, sticker=None):
                               data={"chat_id": cid, "sticker": sticker}, timeout=15)
         except: pass
 
-# --- Results & MTG Tracker ---
 def get_accurate_result(pair, direction, q):
     time.sleep(46) 
     try:
@@ -49,23 +48,14 @@ def get_accurate_result(pair, direction, q):
         return "LOSS"
     except: return "ERROR"
 
-# --- Status & Report Monitor (Restored) ---
 def monitor_loop():
     last_h = None
     while True:
         try:
             now = datetime.now(IST)
-            # 15-Minute Heartbeat
             if now.minute % 15 == 0 and now.minute != last_h:
-                send_msg(f"💓 <b>STATUS CHECK</b>\n🕒 {now.strftime('%H:%M')} IST\n📡 Bot: Active & Scanning\n🛡️ Mode: Monday-Friday (Real+OTC)")
+                send_msg(f"💓 <b>STATUS CHECK</b>\n🕒 {now.strftime('%H:%M')} IST\n📡 Bot: Active & Scanning\n🛡️ Mode: Monday-Friday")
                 last_h = now.minute
-            
-            # Daily Report at 11:59 PM
-            if now.hour == 23 and now.minute == 59 and now.second < 10:
-                rep = f"📊 <b>DAILY TRADING SUMMARY</b>\n\n✅ Direct Wins: {stats['wins']}\n🔄 MTG Wins: {stats['mtg_wins']}\n❌ Total Loss: {stats['losses']}"
-                send_msg(rep)
-                stats["wins"], stats["losses"], stats["mtg_wins"] = 0, 0, 0
-                time.sleep(15)
         except: pass
         time.sleep(10)
 
@@ -75,21 +65,29 @@ def start_bot():
             q = Quotex(email=QUOTEX_EMAIL, password=QUOTEX_PASSWORD)
             ok, msg = q.connect()
             if not ok:
-                send_msg(f"⚠️ <b>Connection Error:</b> {msg}\nRetrying...")
                 time.sleep(20); continue
 
-            send_msg("♠️♠️ <b>QUOTEX BOT FULLY LOADED</b> ♠️♠️\n\n✅ <b>Advance:</b> 40s Early\n✅ <b>Assets:</b> 30+ (Real/OTC)\n✅ <b>Weekend Filter:</b> Enabled\n✅ <b>Status Monitoring:</b> Active")
+            # --- 🛠️ TEST SIGNAL ON STARTUP ---
+            test_time = (datetime.now(IST) + timedelta(minutes=1)).strftime('%H:%M')
+            test_msg = (f"♠️♠️ <b>Quotex Bot (TEST)</b> ♠️♠️\n\n"
+                        f"♠️ <b>PAIR</b> 🟰 💲EURUSD-TEST ♠️\n"
+                        f"♠️ <b>TIME ZONE</b> 🟰 UTC +5:30 ♠️\n\n"
+                        f"♠️ <b>ONE MINUTE TRADE</b> ♠️\n"
+                        f"♠️ <b>TRADE TIME</b> ➖ {test_time} - CALL ♠️\n\n"
+                        f"♠️ <b>1 TIME MTG</b> ♠️\n\n"
+                        f"♠️♠️ <b>Quotex Bot</b> ♠️♠️")
+            send_msg(test_msg, sticker=STICKER_UP)
+            # ---------------------------------
+
+            send_msg("♠️♠️ <b>BOT STARTED & LIVE SCANNING</b> ♠️♠️")
             
             last_min = None
             while True:
                 now = datetime.now(IST)
-                # 40s Advance Trigger (18s-22s window)
                 if 18 <= now.second <= 22 and now.minute != last_min:
                     all_p = q.get_all_asset_payout()
-                    
                     real_p = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "EURJPY", "GBPJPY", "NZDUSD", "AUDCAD"]
                     otc_p = ["EURUSD-OTC", "GBPUSD-OTC", "USDJPY-OTC", "USDPKR-OTC", "USDBDT-OTC", "USDINR-OTC", "USDBRL-OTC", "USDMXN-OTC", "USDARS-OTC", "USDTRY-OTC", "CADJPY-OTC", "NZDCAD-OTC", "AUDUSD-OTC", "GBPJPY-OTC", "USDCAD-OTC", "CHFJPY-OTC"]
-                    
                     scan_list = (real_p + otc_p) if now.weekday() < 5 else otc_p
 
                     for pair in scan_list:
@@ -97,7 +95,6 @@ def start_bot():
                             if all_p.get(pair, 0) < 70: continue
                             candles = q.get_candles(pair, 60, 40, time.time())
                             if not candles: continue
-                            
                             df = pd.DataFrame(candles); df['close'] = pd.to_numeric(df['close'])
                             df['ema5'] = df['close'].ewm(span=5, adjust=False).mean()
                             df['ema13'] = df['close'].ewm(span=13, adjust=False).mean()
@@ -113,17 +110,12 @@ def start_bot():
                                 last_min = now.minute
                                 trade_t = (now + timedelta(minutes=1)).strftime('%H:%M')
                                 st_icon = STICKER_UP if direction == "CALL" else STICKER_DOWN
-                                
                                 msg = (f"♠️♠️ <b>Quotex Bot</b> ♠️♠️\n\n"
                                        f"♠️ <b>PAIR</b> 🟰 💲{pair.upper()} ♠️\n"
-                                       f"♠️ <b>TIME ZONE</b> 🟰 UTC +5:30 ♠️\n\n"
-                                       f"♠️ <b>ONE MINUTE TRADE</b> ♠️\n"
                                        f"♠️ <b>TRADE TIME</b> ➖ {trade_t} - {direction} ♠️\n\n"
                                        f"♠️ <b>1 TIME MTG</b> ♠️\n\n"
                                        f"♠️♠️ <b>Quotex Bot</b> ♠️♠️")
-                                
                                 send_msg(msg, sticker=st_icon)
-                                
                                 res = get_accurate_result(pair, direction, q)
                                 if res == "WIN":
                                     send_msg(f"✅ {pair}: <b>ITM</b>", STICKER_ITM); stats["wins"] += 1
