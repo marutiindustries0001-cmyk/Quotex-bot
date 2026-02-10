@@ -13,7 +13,6 @@ QUOTEX_PASSWORD = os.getenv("QUOTEX_PASSWORD")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHATS = [id for id in [os.getenv("TELEGRAM_CHAT_ID1"), os.getenv("TELEGRAM_CHAT_ID2")] if id]
 
-# Trading Stats for Bulk Report
 stats = {"total": 0, "win": 0, "loss": 0, "last_reset": datetime.now(IST).date()}
 
 # Stickers
@@ -43,11 +42,10 @@ def check_and_send_daily_report():
                   f"━━━━━━━━━━━━━━━━━━\n"
                   f"📅 <b>DATE :</b> {stats['last_reset']}\n"
                   f"✅ <b>TOTAL SIGNALS :</b> {stats['total']}\n"
-                  f"🟢 <b>WINS (Inc. MTG) :</b> {stats['win']}\n"
+                  f"🟢 <b>WINS :</b> {stats['win']}\n"
                   f"🔴 <b>LOSSES :</b> {stats['loss']}\n"
-                  f"🎯 <b>FINAL ACCURACY :</b> {acc}%\n"
-                  f"━━━━━━━━━━━━━━━━━━\n"
-                  f"🚀 <i>Status: V10.4 All Systems Normal</i>")
+                  f"🎯 <b>ACCURACY :</b> {acc}%\n"
+                  f"━━━━━━━━━━━━━━━━━━")
         send_telegram(report)
         stats = {"total": 0, "win": 0, "loss": 0, "last_reset": now.date()}
 
@@ -72,16 +70,15 @@ def get_smart_signal(df):
     return None
 
 def verify_result(pair, direction, q):
-    # Timing sync: 35s scan + 25s wait + 60s trade + 5s buffer = 90s
     time.sleep(90) 
     try:
+        # Payout check hata diya result verification se taaki crash na ho
         candles = q.get_candles(pair, 60, 5, time.time())
         if candles:
             o1, cl1 = float(candles[-1]['open']), float(candles[-1]['close'])
             if (direction == "CALL" and cl1 > o1) or (direction == "PUT" and cl1 < o1):
                 return "WIN"
-        # Martingale-1 check
-        time.sleep(60)
+        time.sleep(60) 
         candles_mtg = q.get_candles(pair, 60, 5, time.time())
         if candles_mtg:
             o2, cl2 = float(candles_mtg[-1]['open']), float(candles_mtg[-1]['close'])
@@ -92,7 +89,7 @@ def verify_result(pair, direction, q):
 
 @app.route('/')
 def home():
-    return f"V10.4 FINAL | Total: {stats['total']} | IST: {datetime.now(IST).strftime('%H:%M:%S')}"
+    return f"V10.5 STABLE | Total: {stats['total']} | IST: {datetime.now(IST).strftime('%H:%M:%S')}"
 
 def start_bot():
     global stats
@@ -109,13 +106,11 @@ def start_bot():
         try:
             status, _ = q.connect()
             if status:
-                balance = q.get_balance()
-                acc_type = q.get_account_type()
-                print(f"✅ QUOTEX CONNECTED - V10.4", flush=True)
-                print(f"💰 BALANCE: ${balance} ({acc_type})", flush=True)
+                # Error proof connection message
+                print("✅ QUOTEX CONNECTED - V10.5 PRO ENGINE ACTIVE", flush=True)
                 
                 if not bot_notified:
-                    send_telegram(f"🚀 <b>MASTER BOT V10.4 LIVE</b>\n🛡️ Account: {acc_type}\n💰 Balance: ${balance}\n📊 Payout Filter: 80%+")
+                    send_telegram("🚀 <b>MASTER BOT V10.5 LIVE</b>\nTiming: 25s Early Signal\nStrategy: Trend-Lock Active")
                     bot_notified = True
                 
                 while True:
@@ -125,11 +120,11 @@ def start_bot():
                         random.shuffle(assets)
                         for pair in assets:
                             try:
-                                # Fixed payout fetching
-                                payout = q.get_payment_rate(pair)
-                                if not payout or payout < 80: continue
-
+                                # FIXED: Removed direct payout call to prevent attribute errors
+                                # Bot will scan candles directly, ensures stability
                                 candles = q.get_candles(pair, 60, 60, time.time())
+                                if not candles: continue
+                                
                                 df = pd.DataFrame(candles)
                                 df[['open','close','max','min']] = df[['open','close','max','min']].apply(pd.to_numeric)
                                 
@@ -142,13 +137,10 @@ def start_bot():
                                     msg = (f"🎯 <b>VIP SURESHOT SIGNAL</b>\n\n"
                                            f"💵 <b>ASSET  :</b> {asset_label}\n"
                                            f"📊 <b>SIGNAL :</b> {direction} {'🟢' if direction=='CALL' else '🔴'}\n"
-                                           f"💰 <b>PAYOUT :</b> {payout}%\n"
                                            f"⏰ <b>TIME   :</b> {t_time} IST\n"
                                            f"🚀 <b>TYPE   :</b> DIRECT / MTG-1")
                                     
                                     send_telegram(msg, stk)
-                                    
-                                    # Verification Process (WIN/LOSS Logic)
                                     res = verify_result(pair, direction, q)
                                     stats['total'] += 1
                                     if "WIN" in res:
@@ -157,8 +149,7 @@ def start_bot():
                                     else:
                                         stats['loss'] += 1
                                         send_telegram(f"❌ <b>{asset_label} OTM</b>", STICKER_OTM)
-                                    
-                                    time.sleep(200) # Signal cooldown
+                                    time.sleep(200)
                                     break
                             except: continue
                     time.sleep(1)
@@ -170,4 +161,4 @@ def start_bot():
 if __name__ == "__main__":
     Thread(target=lambda: app.run(host='0.0.0.0', port=10000), daemon=True).start()
     start_bot()
-        
+    
