@@ -4,7 +4,7 @@ from threading import Thread
 from flask import Flask
 from quotexapi.stable_api import Quotex
 
-# --- CONFIG ---
+# --- CONFIG & SETUP ---
 IST = pytz.timezone('Asia/Kolkata')
 app = Flask(__name__)
 
@@ -15,31 +15,35 @@ CHATS = [id for id in [os.getenv("TELEGRAM_CHAT_ID1"), os.getenv("TELEGRAM_CHAT_
 
 stats = {"total": 0, "win": 0, "loss": 0}
 
-# Stickers (Updated IDs)
+# Stickers (Verified IDs)
 STICKER_CALL = "CAACAgUAAxkBAAEQQrFpa4L0pG7vMxyE7AAB_O9y8QACjgwAAjiMQVdc4NyQYU8iNzgE"
 STICKER_PUT = "CAACAgUAAxkBAAEQQrNpa4M1_yAxq3Rj7DIJz0Sx4CGlgACgh4AAnSoUVd08ZdnRO6rxTgE"
 STICKER_ITM = "CAACAgUAAxkBAAEQQoppa364FzxNIASmRZkpvYGvdo3l8QACjgwAAjiMQVdc4NyQYU8iNzgE"
 STICKER_OTM = "CAACAgUAAxkBAAEQQoxpa38lMmyAxq3Rj7DIJz0Sx4CGlgACgh4AAnSoUVd08ZdnRO6rxTgE"
 
-def send_signal_with_sticker(text, sticker_id):
-    """Bundled delivery for text and sticker"""
+def send_signal_package(text, sticker_id):
+    """Bundled delivery for Text + Sticker"""
     if not TELEGRAM_BOT_TOKEN: return
     for cid in CHATS:
         try:
             # Send Message
             requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", 
                           data={"chat_id": cid, "text": text, "parse_mode": "HTML"}, timeout=15)
-            # Send Sticker (Using 'data' instead of 'json' for better compatibility)
+            # Send Sticker
             requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendSticker", 
                           data={"chat_id": cid, "sticker": sticker_id}, timeout=15)
         except Exception as e:
-            print(f"Telegram Post Error: {e}")
+            print(f"Telegram Error: {e}")
 
-def get_strategy_signal(df):
+def get_trend_lock_signal(df):
+    """Advanced Strategy: EMA 20 + RSI 14 + Candle Color Confirmation"""
     close = df['close']
     open_p = df['open']
-    ema = close.ewm(span=20, adjust=False).mean().iloc[-1]
     
+    # Trend Filter (EMA 20)
+    ema_20 = close.ewm(span=20, adjust=False).mean().iloc[-1]
+    
+    # Momentum Filter (RSI 14)
     delta = close.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
@@ -48,36 +52,44 @@ def get_strategy_signal(df):
     curr_close = close.iloc[-1]
     curr_open = open_p.iloc[-1]
 
-    if curr_close > ema and 52 < rsi < 75 and curr_close > curr_open:
+    # CALL Logic: Price > EMA (Uptrend) + RSI > 52 + Bullish Candle
+    if curr_close > ema_20 and 52 < rsi < 70 and curr_close > curr_open:
         return "CALL"
-    if curr_close < ema and 25 < rsi < 48 and curr_close < curr_open:
+            
+    # PUT Logic: Price < EMA (Downtrend) + RSI < 48 + Bearish Candle
+    if curr_close < ema_20 and 30 < rsi < 48 and curr_close < curr_open:
         return "PUT"
+            
     return None
 
 def verify_result(pair, direction, q):
-    time.sleep(65) # First candle wait
+    """Wait for trade to finish and check result using price action"""
+    # Wait: 25s (to start) + 60s (trade) + 5s (buffer) = 90s
+    time.sleep(90) 
     try:
-        candles = q.get_candles(pair, 60, 5, time.time())
-        if not candles: return "LOSS"
-        c1 = candles[-1]
-        o1, cl1 = float(c1['open']), float(c1['close'])
+        candles = q.get_candles(pair, 60, 10, time.time())
+        if candles:
+            c1 = candles[-1]
+            o1, cl1 = float(c1['open']), float(c1['close'])
+            
+            # Check Direct Win
+            if (direction == "CALL" and cl1 > o1) or (direction == "PUT" and cl1 < o1):
+                return "WIN"
         
-        if direction == "CALL" and cl1 > o1: return "WIN"
-        if direction == "PUT" and cl1 < o1: return "WIN"
-        
-        # MTG-1 Logic
+        # If Direct Loss, wait for MTG-1 (Next 60s)
         time.sleep(60)
-        candles_mtg = q.get_candles(pair, 60, 5, time.time())
-        c2 = candles_mtg[-1]
-        o2, cl2 = float(c2['open']), float(c2['close'])
-        
-        if direction == "CALL" and cl2 > o2: return "MTG_WIN"
-        if direction == "PUT" and cl2 < o2: return "MTG_WIN"
+        candles_mtg = q.get_candles(pair, 60, 10, time.time())
+        if candles_mtg:
+            c2 = candles_mtg[-1]
+            o2, cl2 = float(c2['open']), float(c2['close'])
+            if (direction == "CALL" and cl2 > o2) or (direction == "PUT" and cl2 < o2):
+                return "MTG_WIN"
     except: pass
     return "LOSS"
 
 @app.route('/')
-def home(): return f"V8.2 FIXED STICKERS | W:{stats['win']} L:{stats['loss']}"
+def home():
+    return f"💎 MASTER BOT V9.0 | WINS: {stats['win']} | LOSS: {stats['loss']} | STATUS: ACTIVE"
 
 def start_bot():
     global stats
@@ -95,10 +107,11 @@ def start_bot():
         try:
             status, _ = q.connect()
             if status:
-                print("✅ V8.2 BOT CONNECTED")
+                print("✅ QUOTEX CONNECTED - V9.0 PRO ENGINE ACTIVE")
                 while True:
                     now = datetime.now(IST)
-                    if now.second == 50:
+                    # Trigger analysis 25 seconds early (at 35th second)
+                    if now.second == 35: 
                         random.shuffle(assets)
                         for pair in assets:
                             try:
@@ -108,42 +121,49 @@ def start_bot():
                                 df['close'] = pd.to_numeric(df['close'])
                                 df['open'] = pd.to_numeric(df['open'])
                                 
-                                direction = get_strategy_signal(df)
+                                direction = get_trend_lock_signal(df)
                                 if direction:
-                                    asset_name = pair.replace("_otc", "-OTC").upper()
+                                    asset_label = pair.replace("_otc", "-OTC").upper()
                                     t_time = (now + timedelta(minutes=1)).strftime('%H:%M')
                                     symbol = "🟢" if direction == "CALL" else "🔴"
-                                    sticker = STICKER_CALL if direction == "CALL" else STICKER_PUT
+                                    stk = STICKER_CALL if direction == "CALL" else STICKER_PUT
                                     
                                     msg = (f"🎯 <b>VIP SURESHOT SIGNAL</b>\n\n"
-                                           f"💵 <b>ASSET  :</b> {asset_name}\n"
+                                           f"💵 <b>ASSET  :</b> {asset_label}\n"
                                            f"📊 <b>SIGNAL :</b> {direction} {symbol}\n"
                                            f"⏰ <b>TIME   :</b> {t_time} IST\n"
-                                           f"🚀 <b>TYPE   :</b> DIRECT / MTG-1")
+                                           f"🚀 <b>TYPE   :</b> DIRECT / MTG-1\n"
+                                           f"⏳ <b>STATUS :</b> 25s EARLY ANALYSIS")
                                     
-                                    # Calling the fixed sender
-                                    send_signal_with_sticker(msg, sticker)
+                                    send_signal_package(msg, stk)
                                     
+                                    # Verification Process
                                     res = verify_result(pair, direction, q)
                                     stats['total'] += 1
                                     if res == "WIN":
                                         stats['win'] += 1
-                                        send_signal_with_sticker(f"✅ <b>{asset_name} DIRECT WIN!!</b>", STICKER_ITM)
+                                        send_signal_package(f"✅ <b>{asset_label} DIRECT WIN!!</b>", STICKER_ITM)
                                     elif res == "MTG_WIN":
                                         stats['win'] += 1
-                                        send_signal_with_sticker(f"✅ <b>{asset_name} MTG-1 WIN!!</b>", STICKER_ITM)
+                                        send_signal_package(f"✅ <b>{asset_label} MTG-1 WIN!!</b>", STICKER_ITM)
                                     else:
                                         stats['loss'] += 1
-                                        send_signal_with_sticker(f"❌ <b>{asset_name} OTM (Loss)</b>", STICKER_OTM)
+                                        send_signal_package(f"❌ <b>{asset_label} OTM (LOSS)</b>", STICKER_OTM)
                                     
-                                    time.sleep(150)
+                                    # 3-4 minute gap before searching for next signal
+                                    time.sleep(210) 
                                     break
                             except: continue
                     time.sleep(1)
-            else: time.sleep(10)
-        except: time.sleep(5)
+            else: 
+                print("❌ Connection failed, retrying...")
+                time.sleep(10)
+        except Exception as e:
+            print(f"Bot Loop Error: {e}")
+            time.sleep(5)
 
 if __name__ == "__main__":
+    # Web dashboard for keeping bot alive
     Thread(target=lambda: app.run(host='0.0.0.0', port=10000), daemon=True).start()
     start_bot()
-    
+                                    
