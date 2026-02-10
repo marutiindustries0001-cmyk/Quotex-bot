@@ -15,37 +15,42 @@ CHATS = [id for id in [os.getenv("TELEGRAM_CHAT_ID1"), os.getenv("TELEGRAM_CHAT_
 
 stats = {"total": 0, "win": 0, "loss": 0, "last_reset": datetime.now(IST).date()}
 
-# Stickers
+# Stickers (Validated IDs)
 STICKER_CALL = "CAACAgUAAxkBAAEQQrFpa4L0pG7vMxyE7AAB_O9y8QACjgwAAjiMQVdc4NyQYU8iNzgE"
 STICKER_PUT = "CAACAgUAAxkBAAEQQrNpa4M1_yAxq3Rj7DIJz0Sx4CGlgACgh4AAnSoUVd08ZdnRO6rxTgE"
 STICKER_ITM = "CAACAgUAAxkBAAEQQoppa364FzxNIASmRZkpvYGvdo3l8QACjgwAAjiMQVdc4NyQYU8iNzgE"
 STICKER_OTM = "CAACAgUAAxkBAAEQQoxpa38lMmyAxq3Rj7DIJz0Sx4CGlgACgh4AAnSoUVd08ZdnRO6rxTgE"
 
-def notify_telegram(text, sticker_id=None):
+def send_signal_with_sticker(text, sticker_id):
+    """Bundled delivery to ensure sticker follows message immediately"""
     if not TELEGRAM_BOT_TOKEN: return
     for cid in CHATS:
         try:
+            # Send Text Message
             requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", 
-                          data={"chat_id": cid, "text": text, "parse_mode": "HTML"}, timeout=10)
-            if sticker_id:
-                requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendSticker", 
-                              data={"chat_id": cid, "sticker": sticker_id}, timeout=10)
-        except: pass
+                          data={"chat_id": cid, "text": text, "parse_mode": "HTML"}, timeout=15)
+            # Send Sticker
+            requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendSticker", 
+                          data={"chat_id": cid, "sticker": sticker_id}, timeout=15)
+        except Exception as e:
+            print(f"Telegram Error: {e}")
 
-def get_real_result(pair, direction, q):
-    time.sleep(105)
+def get_color_result(pair, direction, q):
+    # Wait: 40s (lead) + 60s (trade) + 15s (buffer) = 115s
+    time.sleep(115)
     try:
         candles = q.get_candles(pair, 60, 1, time.time())
         if candles:
             c = candles[0]
             o, cl = float(c['open']), float(c['close'])
+            # Win if CALL is Green (cl > o) or PUT is Red (cl < o)
             if direction == "CALL": return "WIN" if cl > o else "LOSS"
-            else: return "WIN" if cl < o else "LOSS"
+            elif direction == "PUT": return "WIN" if cl < o else "LOSS"
     except: pass
     return "LOSS"
 
 @app.route('/')
-def home(): return f"VIP MASTER BOT | W:{stats['win']} L:{stats['loss']}"
+def home(): return f"💎 MASTER BOT V7 | W:{stats['win']} L:{stats['loss']} | STICKER FIXED"
 
 def start_bot():
     global stats
@@ -57,12 +62,11 @@ def start_bot():
             if ok:
                 print(f"✅ LOGIN SUCCESSFUL: {QUOTEX_EMAIL}")
                 if not bot_notified:
-                    notify_telegram("💎 <b>MASTER BOT: ALL FEATURES RESTORED</b>", STICKER_ITM)
+                    send_signal_with_sticker("🚀 <b>MASTER BOT: STICKERS & IST RESTORED</b>", STICKER_ITM)
                     bot_notified = True
                 
                 while True:
                     now = datetime.now(IST)
-                    
                     if now.second == 20:
                         assets = [
                             "EURUSD_otc", "GBPUSD_otc", "USDJPY_otc", "USDINR_otc", "EURJPY_otc", "GBPJPY_otc", 
@@ -84,39 +88,36 @@ def start_bot():
                                 ema = df['close'].ewm(span=14, adjust=False).mean().iloc[-1]
                                 rsi = 100 - (100 / (1 + (df['close'].diff().where(df['close'].diff() > 0, 0).rolling(14).mean().iloc[-1] / (-df['close'].diff().where(df['close'].diff() < 0, 0).rolling(14).mean().iloc[-1] + 1e-10))))
 
-                                direction = None
-                                symbol = ""
+                                direction, symbol, sticker = None, "", ""
                                 if df['close'].iloc[-1] > ema and rsi > 58: 
-                                    direction = "CALL"
-                                    symbol = "🟢"
+                                    direction, symbol, sticker = "CALL", "🟢", STICKER_CALL
                                 elif df['close'].iloc[-1] < ema and rsi < 42: 
-                                    direction = "PUT"
-                                    symbol = "🔴"
+                                    direction, symbol, sticker = "PUT", "🔴", STICKER_PUT
 
                                 if direction:
-                                    t_time = (now + timedelta(minutes=1)).replace(second=0).strftime('%H:%M')
+                                    t_obj = (now + timedelta(minutes=1)).replace(second=0)
+                                    t_time = t_obj.strftime('%H:%M')
                                     asset_label = pair.replace("_otc", "-OTC").upper()
                                     
-                                    # Restored Signal Message with Emoji & MTG info
                                     msg = (f"🎯 <b>VIP SURESHOT SIGNAL</b>\n\n"
                                            f"💵 <b>ASSET :</b> {asset_label}\n"
                                            f"📊 <b>DIR   :</b> {direction} {symbol}\n"
-                                           f"⏰ <b>TIME  :</b> {t_time}\n"
+                                           f"⏰ <b>TIME  :</b> {t_time} IST (GMT+5:30)\n"
                                            f"🚀 <b>TYPE  :</b> Direct / MTG-1")
                                     
-                                    notify_telegram(msg, STICKER_CALL if direction == "CALL" else STICKER_PUT)
+                                    send_signal_with_sticker(msg, sticker)
                                     
-                                    res = get_real_result(pair, direction, q)
+                                    res = get_color_result(pair, direction, q)
                                     stats['total'] += 1
                                     if res == "WIN":
                                         stats['win'] += 1
-                                        notify_telegram(f"✅ <b>{asset_label} ITM!!</b>", STICKER_ITM)
+                                        send_signal_with_sticker(f"✅ <b>{asset_label} ITM!!</b>", STICKER_ITM)
                                     else:
                                         stats['loss'] += 1
-                                        notify_telegram(f"❌ <b>{asset_label} OTM (Wait for MTG)</b>", STICKER_OTM)
+                                        send_signal_with_sticker(f"❌ <b>{asset_label} OTM</b>", STICKER_OTM)
                                     
                                     found = True
-                                    time.sleep(300) # 5 Min Gap
+                                    time.sleep(260) # 4-5 Min Gap
                                     break
                             except: continue
                     time.sleep(1)
@@ -126,4 +127,3 @@ def start_bot():
 if __name__ == "__main__":
     Thread(target=lambda: app.run(host='0.0.0.0', port=10000), daemon=True).start()
     start_bot()
-    
