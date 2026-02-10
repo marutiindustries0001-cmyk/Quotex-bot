@@ -13,7 +13,7 @@ QUOTEX_PASSWORD = os.getenv("QUOTEX_PASSWORD")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHATS = [id for id in [os.getenv("TELEGRAM_CHAT_ID1"), os.getenv("TELEGRAM_CHAT_ID2")] if id]
 
-# Trading Stats
+# Trading Stats for Bulk Report
 stats = {"total": 0, "win": 0, "loss": 0, "last_reset": datetime.now(IST).date()}
 
 # Stickers
@@ -47,7 +47,7 @@ def check_and_send_daily_report():
                   f"🔴 <b>LOSSES :</b> {stats['loss']}\n"
                   f"🎯 <b>FINAL ACCURACY :</b> {acc}%\n"
                   f"━━━━━━━━━━━━━━━━━━\n"
-                  f"🚀 <i>Status: Payout 80%+ Filter Active</i>")
+                  f"🚀 <i>Status: V10.4 All Systems Normal</i>")
         send_telegram(report)
         stats = {"total": 0, "win": 0, "loss": 0, "last_reset": now.date()}
 
@@ -72,6 +72,7 @@ def get_smart_signal(df):
     return None
 
 def verify_result(pair, direction, q):
+    # Timing sync: 35s scan + 25s wait + 60s trade + 5s buffer = 90s
     time.sleep(90) 
     try:
         candles = q.get_candles(pair, 60, 5, time.time())
@@ -79,7 +80,8 @@ def verify_result(pair, direction, q):
             o1, cl1 = float(candles[-1]['open']), float(candles[-1]['close'])
             if (direction == "CALL" and cl1 > o1) or (direction == "PUT" and cl1 < o1):
                 return "WIN"
-        time.sleep(60) 
+        # Martingale-1 check
+        time.sleep(60)
         candles_mtg = q.get_candles(pair, 60, 5, time.time())
         if candles_mtg:
             o2, cl2 = float(candles_mtg[-1]['open']), float(candles_mtg[-1]['close'])
@@ -90,43 +92,42 @@ def verify_result(pair, direction, q):
 
 @app.route('/')
 def home():
-    return f"V10.1 LIVE | Payout: 80%+ | Total Trades: {stats['total']}"
+    return f"V10.4 FINAL | Total: {stats['total']} | IST: {datetime.now(IST).strftime('%H:%M:%S')}"
 
 def start_bot():
     global stats
     q = Quotex(email=QUOTEX_EMAIL, password=QUOTEX_PASSWORD)
     bot_notified = False
     
-    assets = [
-        "EURUSD_otc", "GBPUSD_otc", "USDJPY_otc", "USDINR_otc", "EURJPY_otc", "GBPJPY_otc", 
-        "AUDUSD_otc", "USDPKR_otc", "USDBRL_otc", "EURGBP_otc", "USDTRY_otc", "USDBDT_otc",
-        "FACEBOOK_otc", "MICROSOFT_otc", "INTEL_otc", "BOEING_otc", "APPLE_otc", "GOOGLE_otc", 
-        "AMAZON_otc", "VISA_otc", "NETFLIX_otc", "MCDONALDS_otc", "ADIDAS_otc", "IBM_otc", "TESLA_otc",
-        "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "EURJPY", "USDCAD", "EURGBP", "USDCHF"
-    ]
+    assets = ["EURUSD_otc", "GBPUSD_otc", "USDJPY_otc", "USDINR_otc", "EURJPY_otc", "GBPJPY_otc", 
+              "AUDUSD_otc", "USDPKR_otc", "USDBRL_otc", "EURGBP_otc", "USDTRY_otc", "USDBDT_otc",
+              "FACEBOOK_otc", "MICROSOFT_otc", "INTEL_otc", "BOEING_otc", "APPLE_otc", "GOOGLE_otc", 
+              "AMAZON_otc", "VISA_otc", "NETFLIX_otc", "MCDONALDS_otc", "ADIDAS_otc", "IBM_otc", "TESLA_otc",
+              "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "EURJPY", "USDCAD", "EURGBP", "USDCHF"]
 
     while True:
         try:
             status, _ = q.connect()
             if status:
-                # Flush=True for Live Render Logs
-                print("✅ QUOTEX CONNECTED - V10.1 PRO ENGINE ACTIVE", flush=True)
+                balance = q.get_balance()
+                acc_type = q.get_account_type()
+                print(f"✅ QUOTEX CONNECTED - V10.4", flush=True)
+                print(f"💰 BALANCE: ${balance} ({acc_type})", flush=True)
                 
                 if not bot_notified:
-                    send_telegram("🚀 <b>MASTER BOT V10.1 LIVE</b>\nTiming: 25s Early Signal\n🛡️ Payout Filter: 80%+\n🛡️ Trend-Lock: ON")
+                    send_telegram(f"🚀 <b>MASTER BOT V10.4 LIVE</b>\n🛡️ Account: {acc_type}\n💰 Balance: ${balance}\n📊 Payout Filter: 80%+")
                     bot_notified = True
                 
                 while True:
                     check_and_send_daily_report()
                     now = datetime.now(IST)
-                    
                     if now.second == 35:
                         random.shuffle(assets)
-                        all_payouts = q.get_all_asset_payout()
-                        
                         for pair in assets:
                             try:
-                                if all_payouts.get(pair, 0) < 80: continue
+                                # Fixed payout fetching
+                                payout = q.get_payment_rate(pair)
+                                if not payout or payout < 80: continue
 
                                 candles = q.get_candles(pair, 60, 60, time.time())
                                 df = pd.DataFrame(candles)
@@ -135,17 +136,21 @@ def start_bot():
                                 direction = get_smart_signal(df)
                                 if direction:
                                     asset_label = pair.replace("_otc", "-OTC").upper()
+                                    t_time = (now + timedelta(minutes=1)).strftime('%H:%M')
+                                    stk = STICKER_CALL if direction == "CALL" else STICKER_PUT
+                                    
                                     msg = (f"🎯 <b>VIP SURESHOT SIGNAL</b>\n\n"
                                            f"💵 <b>ASSET  :</b> {asset_label}\n"
                                            f"📊 <b>SIGNAL :</b> {direction} {'🟢' if direction=='CALL' else '🔴'}\n"
-                                           f"💰 <b>PAYOUT :</b> {all_payouts.get(pair)}%\n"
-                                           f"⏰ <b>TIME   :</b> {(now + timedelta(minutes=1)).strftime('%H:%M')} IST\n"
+                                           f"💰 <b>PAYOUT :</b> {payout}%\n"
+                                           f"⏰ <b>TIME   :</b> {t_time} IST\n"
                                            f"🚀 <b>TYPE   :</b> DIRECT / MTG-1")
                                     
-                                    send_telegram(msg, STICKER_CALL if direction == "CALL" else STICKER_PUT)
+                                    send_telegram(msg, stk)
+                                    
+                                    # Verification Process (WIN/LOSS Logic)
                                     res = verify_result(pair, direction, q)
                                     stats['total'] += 1
-                                    
                                     if "WIN" in res:
                                         stats['win'] += 1
                                         send_telegram(f"✅ <b>{asset_label} {res}!!</b>", STICKER_ITM)
@@ -153,13 +158,11 @@ def start_bot():
                                         stats['loss'] += 1
                                         send_telegram(f"❌ <b>{asset_label} OTM</b>", STICKER_OTM)
                                     
-                                    time.sleep(200)
+                                    time.sleep(200) # Signal cooldown
                                     break
                             except: continue
                     time.sleep(1)
-            else: 
-                print("❌ Login failed, retrying in 10s...", flush=True)
-                time.sleep(10)
+            else: time.sleep(10)
         except Exception as e:
             print(f"Error: {e}", flush=True)
             time.sleep(5)
@@ -167,4 +170,4 @@ def start_bot():
 if __name__ == "__main__":
     Thread(target=lambda: app.run(host='0.0.0.0', port=10000), daemon=True).start()
     start_bot()
-    
+        
