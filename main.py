@@ -13,6 +13,7 @@ QUOTEX_PASSWORD = os.getenv("QUOTEX_PASSWORD")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHATS = [id for id in [os.getenv("TELEGRAM_CHAT_ID1"), os.getenv("TELEGRAM_CHAT_ID2")] if id]
 
+# Global Stats
 stats = {"total": 0, "win": 0, "loss": 0, "last_reset": datetime.now(IST).date()}
 
 # Stickers
@@ -33,52 +34,19 @@ def send_telegram(text, sticker_id=None):
                               data={"chat_id": cid, "sticker": sticker_id}, timeout=15)
         except: pass
 
-def check_and_send_daily_report():
-    global stats
-    now = datetime.now(IST)
-    if now.date() > stats['last_reset']:
-        acc = round((stats['win'] / stats['total'] * 100), 2) if stats['total'] > 0 else 0
-        report = (f"📊 <b>FULL DAY PERFORMANCE REPORT</b>\n"
-                  f"━━━━━━━━━━━━━━━━━━\n"
-                  f"📅 <b>DATE :</b> {stats['last_reset']}\n"
-                  f"✅ <b>TOTAL SIGNALS :</b> {stats['total']}\n"
-                  f"🟢 <b>WINS :</b> {stats['win']}\n"
-                  f"🔴 <b>LOSSES :</b> {stats['loss']}\n"
-                  f"🎯 <b>ACCURACY :</b> {acc}%\n"
-                  f"━━━━━━━━━━━━━━━━━━")
-        send_telegram(report)
-        stats = {"total": 0, "win": 0, "loss": 0, "last_reset": now.date()}
-
-def get_smart_signal(df):
-    close, open_p = df['close'], df['open']
-    high, low = df['max'], df['min']
-    ema_20 = close.ewm(span=20, adjust=False).mean().iloc[-1]
-    
-    delta = close.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-    rsi = 100 - (100 / (1 + (gain / (loss + 1e-10)))).iloc[-1]
-
-    body_size = abs(close.iloc[-1] - open_p.iloc[-1])
-    total_size = high.iloc[-1] - low.iloc[-1]
-    is_strong = body_size > (total_size * 0.3)
-
-    if close.iloc[-1] > ema_20 and 51 < rsi < 72 and close.iloc[-1] > open_p.iloc[-1] and is_strong:
-        return "CALL"
-    if close.iloc[-1] < ema_20 and 28 < rsi < 49 and close.iloc[-1] < open_p.iloc[-1] and is_strong:
-        return "PUT"
-    return None
-
-def verify_result(pair, direction, q):
-    time.sleep(90) 
+def verify_full_trade_result(pair, direction, q):
+    """Wait for Direct and MTG-1 Results"""
+    # Wait for Direct Candle to close (35s scan + 25s remaining + 5s buffer)
+    time.sleep(35) 
     try:
-        # Payout check hata diya result verification se taaki crash na ho
         candles = q.get_candles(pair, 60, 5, time.time())
         if candles:
             o1, cl1 = float(candles[-1]['open']), float(candles[-1]['close'])
             if (direction == "CALL" and cl1 > o1) or (direction == "PUT" and cl1 < o1):
                 return "WIN"
-        time.sleep(60) 
+        
+        # If Direct Loss, wait 60s for MTG-1
+        time.sleep(60)
         candles_mtg = q.get_candles(pair, 60, 5, time.time())
         if candles_mtg:
             o2, cl2 = float(candles_mtg[-1]['open']), float(candles_mtg[-1]['close'])
@@ -89,7 +57,7 @@ def verify_result(pair, direction, q):
 
 @app.route('/')
 def home():
-    return f"V10.5 STABLE | Total: {stats['total']} | IST: {datetime.now(IST).strftime('%H:%M:%S')}"
+    return f"V11.6 ACTIVE | W:{stats['win']} L:{stats['loss']} | Reset: {stats['last_reset']}"
 
 def start_bot():
     global stats
@@ -99,49 +67,64 @@ def start_bot():
     assets = ["EURUSD_otc", "GBPUSD_otc", "USDJPY_otc", "USDINR_otc", "EURJPY_otc", "GBPJPY_otc", 
               "AUDUSD_otc", "USDPKR_otc", "USDBRL_otc", "EURGBP_otc", "USDTRY_otc", "USDBDT_otc",
               "FACEBOOK_otc", "MICROSOFT_otc", "INTEL_otc", "BOEING_otc", "APPLE_otc", "GOOGLE_otc", 
-              "AMAZON_otc", "VISA_otc", "NETFLIX_otc", "MCDONALDS_otc", "ADIDAS_otc", "IBM_otc", "TESLA_otc",
-              "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "EURJPY", "USDCAD", "EURGBP", "USDCHF"]
+              "AMAZON_otc", "VISA_otc", "NETFLIX_otc", "MCDONALDS_otc", "ADIDAS_otc", "IBM_otc", "TESLA_otc"]
 
     while True:
         try:
             status, _ = q.connect()
             if status:
-                # Error proof connection message
-                print("✅ QUOTEX CONNECTED - V10.5 PRO ENGINE ACTIVE", flush=True)
-                
+                print("✅ QUOTEX CONNECTED - V11.6 PRO ACTIVE", flush=True)
                 if not bot_notified:
-                    send_telegram("🚀 <b>MASTER BOT V10.5 LIVE</b>\nTiming: 25s Early Signal\nStrategy: Trend-Lock Active")
+                    send_telegram("🚀 <b>MASTER BOT V11.6 FINAL LIVE</b>\nTiming: 25s Early | Trend-Lock: ON", STICKER_ITM)
                     bot_notified = True
                 
                 while True:
-                    check_and_send_daily_report()
                     now = datetime.now(IST)
-                    if now.second == 35:
+                    
+                    # Midnight Report & Reset
+                    if now.hour == 0 and now.minute == 0 and now.date() != stats['last_reset']:
+                        acc = (stats['win'] / stats['total'] * 100) if stats['total'] > 0 else 0
+                        report = (f"📉 <b>DAILY PERFORMANCE SUMMARY</b>\n━━━━━━━━━━━━━━\n"
+                                  f"✅ Total: {stats['total']}\n🟢 Wins: {stats['win']}\n🔴 Losses: {stats['loss']}\n🎯 Accuracy: {acc:.2f}%")
+                        send_telegram(report, STICKER_ITM if acc > 75 else STICKER_OTM)
+                        stats = {"total": 0, "win": 0, "loss": 0, "last_reset": now.date()}
+
+                    if now.second == 35: # Optimal scanning time
                         random.shuffle(assets)
                         for pair in assets:
                             try:
-                                # FIXED: Removed direct payout call to prevent attribute errors
-                                # Bot will scan candles directly, ensures stability
-                                candles = q.get_candles(pair, 60, 60, time.time())
+                                candles = q.get_candles(pair, 60, 50, time.time())
                                 if not candles: continue
-                                
                                 df = pd.DataFrame(candles)
                                 df[['open','close','max','min']] = df[['open','close','max','min']].apply(pd.to_numeric)
                                 
-                                direction = get_smart_signal(df)
+                                # Indicators
+                                ema = df['close'].ewm(span=14, adjust=False).mean().iloc[-1]
+                                rsi = 100 - (100 / (1 + (df['close'].diff().where(df['close'].diff() > 0, 0).rolling(14).mean().iloc[-1] / (-df['close'].diff().where(df['close'].diff() < 0, 0).rolling(14).mean().iloc[-1] + 1e-10))))
+                                
+                                # Candle Strength
+                                body = abs(df['close'].iloc[-1] - df['open'].iloc[-1])
+                                range_c = df['max'].iloc[-1] - df['min'].iloc[-1]
+                                is_strong = body > (range_c * 0.3) # Avoid Doji
+
+                                direction = None
+                                if df['close'].iloc[-1] > ema and 52 < rsi < 75 and is_strong: direction = "CALL"
+                                elif df['close'].iloc[-1] < ema and 25 < rsi < 48 and is_strong: direction = "PUT"
+
                                 if direction:
-                                    asset_label = pair.replace("_otc", "-OTC").upper()
                                     t_time = (now + timedelta(minutes=1)).strftime('%H:%M')
-                                    stk = STICKER_CALL if direction == "CALL" else STICKER_PUT
+                                    asset_label = pair.replace("_otc", "-OTC").upper()
                                     
                                     msg = (f"🎯 <b>VIP SURESHOT SIGNAL</b>\n\n"
                                            f"💵 <b>ASSET  :</b> {asset_label}\n"
                                            f"📊 <b>SIGNAL :</b> {direction} {'🟢' if direction=='CALL' else '🔴'}\n"
                                            f"⏰ <b>TIME   :</b> {t_time} IST\n"
-                                           f"🚀 <b>TYPE   :</b> DIRECT / MTG-1")
+                                           f"🚀 <b>TYPE   :</b> Direct / MTG-1")
                                     
-                                    send_telegram(msg, stk)
-                                    res = verify_result(pair, direction, q)
+                                    send_telegram(msg, STICKER_CALL if direction=="CALL" else STICKER_PUT)
+                                    
+                                    # Result Logic
+                                    res = verify_full_trade_result(pair, direction, q)
                                     stats['total'] += 1
                                     if "WIN" in res:
                                         stats['win'] += 1
@@ -149,16 +132,15 @@ def start_bot():
                                     else:
                                         stats['loss'] += 1
                                         send_telegram(f"❌ <b>{asset_label} OTM</b>", STICKER_OTM)
-                                    time.sleep(200)
+                                    
+                                    time.sleep(180) # Prevent multiple signals for same candle
                                     break
                             except: continue
                     time.sleep(1)
             else: time.sleep(10)
-        except Exception as e:
-            print(f"Error: {e}", flush=True)
-            time.sleep(5)
+        except: time.sleep(5)
 
 if __name__ == "__main__":
     Thread(target=lambda: app.run(host='0.0.0.0', port=10000), daemon=True).start()
     start_bot()
-    
+           
