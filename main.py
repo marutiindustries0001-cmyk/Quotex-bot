@@ -7,7 +7,7 @@ from quotexapi.stable_api import Quotex
 IST = pytz.timezone('Asia/Kolkata')
 app = Flask(__name__)
 
-# Credentials
+# --- CONFIGURATION ---
 QUOTEX_EMAIL = os.getenv("QUOTEX_EMAIL")
 QUOTEX_PASSWORD = os.getenv("QUOTEX_PASSWORD")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -22,24 +22,23 @@ STICKER_OTM = "CAACAgUAAxkBAAEQQoxpa38lMmyAxq3Rj7DIJz0Sx4CGlgACgh4AAnSoUVd08ZdnR
 def send_msg(text):
     if not TELEGRAM_BOT_TOKEN: return
     for cid in CHATS:
-        try: requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", 
-                          data={"chat_id": cid, "text": text, "parse_mode": "HTML"}, timeout=12)
+        try: requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", data={"chat_id": cid, "text": text, "parse_mode": "HTML"}, timeout=12)
         except: pass
 
 def send_sticker(sticker_id):
     if not TELEGRAM_BOT_TOKEN: return
     for cid in CHATS:
-        try: requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendSticker", 
-                          data={"chat_id": cid, "sticker": sticker_id}, timeout=10)
+        try: requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendSticker", data={"chat_id": cid, "sticker": sticker_id}, timeout=10)
         except: pass
 
-def check_trade_result(pair, direction, q):
-    """Wait for the actual trade candle to close and return result"""
-    time.sleep(62) # Wait for 1 min candle + 2 sec buffer
+def verify_result(pair, direction, q):
+    # Trade candle khatam hone ka wait (62s)
+    time.sleep(62)
     try:
-        candles = q.get_candles(pair, 60, 1, time.time())
+        candles = q.get_candles(pair, 60, 2, time.time())
         if candles:
-            o, c = float(candles[0]['open']), float(candles[0]['close'])
+            candle = candles[-1]
+            o, c = round(float(candle['open']), 6), round(float(candle['close']), 6)
             if o == c: return "TIE"
             if direction == "CALL": return "WIN" if c > o else "LOSS"
             if direction == "PUT": return "WIN" if c < o else "LOSS"
@@ -47,7 +46,7 @@ def check_trade_result(pair, direction, q):
     return "LOSS"
 
 @app.route('/')
-def home(): return "💎 VIP BOT: ALL SETTINGS UPDATED & VERIFIED ✅"
+def home(): return "💎 VIP BOT: BALANCED MODE LIVE ✅"
 
 def start_bot():
     bot_notified = False
@@ -57,75 +56,66 @@ def start_bot():
             ok, _ = q.connect()
             if ok:
                 if not bot_notified:
-                    send_msg("💎 <b>VIP BOT: FULL SETTINGS UPDATED</b> 💎\n\n✅ 35+ Assets Loaded\n✅ Trade Candle Verification Live\n✅ MTG-1 & Visual Signals Fixed")
+                    send_msg("🚀 <b>BALANCED SURESHOT MODE</b> 🚀\n\n✅ 1 Trade at a time\n✅ Proper Result Sequence\n✅ Balanced Accuracy")
                     bot_notified = True
                 
-                last_min = None
+                last_trade_min = -1
                 while True:
                     now = datetime.now(IST)
-                    # Scan at 58th second for next minute's candle
-                    if now.second == 58 and now.minute != last_min:
+                    # Har minute scan karega, lekin sequence follow karega
+                    if now.second == 58 and (now.minute - last_trade_min >= 2 or last_trade_min == -1):
                         
                         scan_list = [
-                            "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "EURJPY", "USDCAD", "EURGBP", "USDCHF",
                             "EURUSD_otc", "GBPUSD_otc", "USDJPY_otc", "USDINR_otc", "EURJPY_otc", "GBPJPY_otc", 
-                            "AUDUSD_otc", "USDPKR_otc", "USDBRL_otc", "EURGBP_otc", "USDTRY_otc", "USDBDT_otc",
-                            "FACEBOOK_otc", "MICROSOFT_otc", "INTEL_otc", "BOEING_otc", "APPLE_otc", "GOOGLE_otc", 
-                            "AMAZON_otc", "VISA_otc", "NETFLIX_otc", "MCDONALDS_otc", "ADIDAS_otc", "IBM_otc", "TESLA_otc"
+                            "AUDUSD_otc", "FACEBOOK_otc", "INTEL_otc", "BOEING_otc", "APPLE_otc", "AMAZON_otc"
                         ]
                         random.shuffle(scan_list)
 
                         for pair in scan_list:
                             try:
-                                candles = q.get_candles(pair, 60, 60, time.time())
-                                if not candles or len(candles) < 50: continue
-                                
+                                candles = q.get_candles(pair, 60, 50, time.time())
+                                if not candles: continue
                                 df = pd.DataFrame(candles)
                                 df['close'] = pd.to_numeric(df['close'])
-                                df['ma5'], df['ma21'] = df['close'].rolling(5).mean(), df['close'].rolling(21).mean()
                                 
-                                # RSI
+                                # Strategy: EMA Cross + RSI (Balanced 55/45)
+                                ema10 = df['close'].ewm(span=10, adjust=False).mean().iloc[-1]
+                                ema20 = df['close'].ewm(span=20, adjust=False).mean().iloc[-1]
+                                
                                 delta = df['close'].diff()
-                                gain, loss = (delta.where(delta > 0, 0)).rolling(14).mean(), (-delta.where(delta < 0, 0)).rolling(14).mean()
-                                df['rsi'] = 100 - (100 / (1 + (gain / loss)))
-
-                                last_c, last_m5, last_m21, last_rsi = df['close'].iloc[-1], df['ma5'].iloc[-1], df['ma21'].iloc[-1], df['rsi'].iloc[-1]
-
+                                gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+                                loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+                                rsi = 100 - (100 / (1 + (gain / loss))).iloc[-1]
+                                
                                 direction = None
-                                if last_c > last_m5 and last_m5 > last_m21 and last_rsi > 55: direction = "CALL"
-                                elif last_c < last_m5 and last_m5 < last_m21 and last_rsi < 45: direction = "PUT"
+                                if df['close'].iloc[-1] > ema10 and ema10 > ema20 and rsi > 55: direction = "CALL"
+                                elif df['close'].iloc[-1] < ema10 and ema10 < ema20 and rsi < 45: direction = "PUT"
                                 
                                 if direction:
-                                    last_min = now.minute
+                                    last_trade_min = now.minute
                                     t_time = (now + timedelta(minutes=1)).strftime('%H:%M')
-                                    display_name = pair.replace("_otc", "-OTC").upper()
-                                    color = "🟢 (UP)" if direction == "CALL" else "🔴 (DOWN)"
+                                    asset_label = pair.replace("_otc", "-OTC").upper()
                                     
-                                    send_msg(f"💎 <b>VIP SIGNAL</b> 💎\n\n━━━━━━━━━━━━━━━\n💵 <b>ASSET  :</b> {display_name}\n📊 <b>SIGNAL :</b> {direction} {color}\n⏰ <b>TIME   :</b> {t_time}\n━━━━━━━━━━━━━━━")
+                                    # Send Signal
+                                    send_msg(f"🎯 <b>BALANCED SIGNAL</b>\n\n💵 <b>ASSET :</b> {asset_label}\n📊 <b>SIGNAL :</b> {direction}\n⏰ <b>TIME  :</b> {t_time}")
                                     send_sticker(STICKER_CALL if direction == "CALL" else STICKER_PUT)
                                     
-                                    # Trade Candle verification starts now
-                                    res = check_trade_result(pair, direction, q)
+                                    # Result Check (Bot yahan wait karega, agla scan nahi karega)
+                                    res = verify_result(pair, direction, q)
                                     if res == "WIN":
-                                        send_msg(f"✅ <b>{display_name} ITM!!</b>"); send_sticker(STICKER_ITM)
-                                    elif res == "TIE":
-                                        send_msg(f"⚖️ <b>{display_name} TIE (REFUND)</b>")
+                                        send_msg(f"✅ <b>{asset_label} ITM!!</b>"); send_sticker(STICKER_ITM)
                                     else:
-                                        send_msg(f"⚠️ <b>{display_name} OTM - MTG-1 START</b>")
-                                        # Checking result for the MTG candle
-                                        res_mtg = check_trade_result(pair, direction, q)
-                                        if res_mtg == "WIN":
-                                            send_msg(f"✅ <b>{display_name} MTG WIN!!</b>"); send_sticker(STICKER_ITM)
-                                        else:
-                                            send_msg(f"❌ <b>{display_name} LOSS</b>"); send_sticker(STICKER_OTM)
+                                        send_msg(f"❌ <b>{asset_label} OTM</b>"); send_sticker(STICKER_OTM)
                                     
-                                    break # Signal found, stop scanning for this minute
+                                    # Trade ke baad 1 min ka extra wait taaki sequence bana rahe
+                                    time.sleep(30)
+                                    break 
                             except: continue
-                    time.sleep(0.5)
+                    time.sleep(1)
             else: time.sleep(10)
         except: time.sleep(5)
 
 if __name__ == "__main__":
     Thread(target=lambda: app.run(host='0.0.0.0', port=10000), daemon=True).start()
     start_bot()
-            
+                    
