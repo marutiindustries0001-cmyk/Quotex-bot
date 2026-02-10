@@ -13,7 +13,7 @@ QUOTEX_PASSWORD = os.getenv("QUOTEX_PASSWORD")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHATS = [id for id in [os.getenv("TELEGRAM_CHAT_ID1"), os.getenv("TELEGRAM_CHAT_ID2")] if id]
 
-# Stats tracking for Bulk Report
+# Trading Stats
 stats = {"total": 0, "win": 0, "loss": 0, "last_reset": datetime.now(IST).date()}
 
 # Stickers
@@ -23,21 +23,28 @@ STICKER_ITM = "CAACAgUAAxkBAAEQQoppa364FzxNIASmRZkpvYGvdo3l8QACjgwAAjiMQVdc4NyQY
 STICKER_OTM = "CAACAgUAAxkBAAEQQoxpa38lMmyAxq3Rj7DIJz0Sx4CGlgACgh4AAnSoUVd08ZdnRO6rxTgE"
 
 def send_telegram(text, sticker_id=None):
+    """Reliable text and sticker delivery"""
     if not TELEGRAM_BOT_TOKEN: return
     for cid in CHATS:
         try:
             requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", 
                           data={"chat_id": cid, "text": text, "parse_mode": "HTML"}, timeout=15)
             if sticker_id:
+                time.sleep(0.5) # Ensuring delivery order
                 requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendSticker", 
                               data={"chat_id": cid, "sticker": sticker_id}, timeout=15)
         except: pass
 
+def get_accuracy():
+    if stats['total'] == 0: return 0
+    return round((stats['win'] / stats['total']) * 100, 2)
+
 def check_and_send_daily_report():
+    """Daily summary reset at 12:00 AM IST"""
     global stats
     now = datetime.now(IST)
     if now.date() > stats['last_reset']:
-        acc = round((stats['win'] / stats['total'] * 100), 2) if stats['total'] > 0 else 0
+        acc = get_accuracy()
         report = (f"📊 <b>FULL DAY TRADE REPORT</b>\n"
                   f"━━━━━━━━━━━━━━━━━━\n"
                   f"📅 <b>DATE :</b> {stats['last_reset']}\n"
@@ -46,43 +53,45 @@ def check_and_send_daily_report():
                   f"🔴 <b>LOSSES :</b> {stats['loss']}\n"
                   f"🎯 <b>FINAL ACCURACY :</b> {acc}%\n"
                   f"━━━━━━━━━━━━━━━━━━\n"
-                  f"💎 <i>New day, new goals. Let's trade!</i>")
-        send_telegram(report, STICKER_ITM)
+                  f"💎 <i>A new session begins. Good luck!</i>")
+        send_telegram(report) # No sticker here for cleaner reports
         stats = {"total": 0, "win": 0, "loss": 0, "last_reset": now.date()}
 
-def get_strategy_signal(df):
-    """Combines EMA, RSI, and Candle Strength"""
+def get_smart_signal(df):
+    """Trend + Momentum + Candle Strength Filter"""
     close, open_p = df['close'], df['open']
+    high, low = df['max'], df['min']
     ema_20 = close.ewm(span=20, adjust=False).mean().iloc[-1]
     
+    # RSI 14
     delta = close.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
     rsi = 100 - (100 / (1 + (gain / (loss + 1e-10)))).iloc[-1]
 
-    curr_close = close.iloc[-1]
-    curr_open = open_p.iloc[-1]
+    # Candle Body Size check (Anti-Doji)
+    body_size = abs(close.iloc[-1] - open_p.iloc[-1])
+    total_size = high.iloc[-1] - low.iloc[-1]
+    is_strong = body_size > (total_size * 0.3)
 
-    # Optimized Trend-Lock
-    if curr_close > ema_20 and 52 < rsi < 72 and curr_close > curr_open:
+    if close.iloc[-1] > ema_20 and 51 < rsi < 72 and close.iloc[-1] > open_p.iloc[-1] and is_strong:
         return "CALL"
-    if curr_close < ema_20 and 28 < rsi < 48 and curr_close < curr_open:
+    if close.iloc[-1] < ema_20 and 28 < rsi < 49 and close.iloc[-1] < open_p.iloc[-1] and is_strong:
         return "PUT"
     return None
 
 def verify_result(pair, direction, q):
-    # Time sync: 35s(start) + 25s(remaining) + 60s(trade) + 5s(buffer)
-    time.sleep(90)
+    """Wait and verify candle results"""
+    time.sleep(90) # Buffer to ensure candle closure after 35s scan
     try:
-        candles = q.get_candles(pair, 60, 10, time.time())
+        candles = q.get_candles(pair, 60, 5, time.time())
         if candles:
             o1, cl1 = float(candles[-1]['open']), float(candles[-1]['close'])
             if (direction == "CALL" and cl1 > o1) or (direction == "PUT" and cl1 < o1):
                 return "WIN"
-        
-        # MTG-1 logic waisa hi hai jaisa pehle tha
+        # MTG-1 logic
         time.sleep(60)
-        candles_mtg = q.get_candles(pair, 60, 10, time.time())
+        candles_mtg = q.get_candles(pair, 60, 5, time.time())
         if candles_mtg:
             o2, cl2 = float(candles_mtg[-1]['open']), float(candles_mtg[-1]['close'])
             if (direction == "CALL" and cl2 > o2) or (direction == "PUT" and cl2 < o2):
@@ -92,14 +101,13 @@ def verify_result(pair, direction, q):
 
 @app.route('/')
 def home():
-    return f"V9.5 ACTIVE | W:{stats['win']} L:{stats['loss']} | IST TIME: {datetime.now(IST).strftime('%H:%M:%S')}"
+    return f"V10.0 FINAL | Payout: 80%+ | Wins: {stats['win']} | Total: {stats['total']}"
 
 def start_bot():
     global stats
     q = Quotex(email=QUOTEX_EMAIL, password=QUOTEX_PASSWORD)
     bot_notified = False
     
-    # SARE PAIRS WAPAS ADDED (No reduction)
     assets = [
         "EURUSD_otc", "GBPUSD_otc", "USDJPY_otc", "USDINR_otc", "EURJPY_otc", "GBPJPY_otc", 
         "AUDUSD_otc", "USDPKR_otc", "USDBRL_otc", "EURGBP_otc", "USDTRY_otc", "USDBDT_otc",
@@ -113,24 +121,26 @@ def start_bot():
             status, _ = q.connect()
             if status:
                 if not bot_notified:
-                    send_telegram("🚀 <b>MASTER BOT V9.5: ANALYZER LIVE</b>\nTiming: 25s Early | Trend-Lock: ON", STICKER_ITM)
+                    # FIXED: Startup message without result stickers
+                    send_telegram("🚀 <b>MASTER BOT V10.0 LIVE</b>\nTiming: 25s Early Signal\n🛡️ Payout Filter: 80%+\n🛡️ Trend-Lock: ON")
                     bot_notified = True
                 
                 while True:
                     check_and_send_daily_report()
                     now = datetime.now(IST)
-                    
-                    # 35th second analysis (Wahi 25 second early signal)
                     if now.second == 35:
                         random.shuffle(assets)
+                        all_payouts = q.get_all_asset_payout()
                         for pair in assets:
                             try:
+                                # Skip low payout
+                                if all_payouts.get(pair, 0) < 80: continue
+
                                 candles = q.get_candles(pair, 60, 60, time.time())
-                                if not candles: continue
                                 df = pd.DataFrame(candles)
-                                df[['open','close']] = df[['open','close']].apply(pd.to_numeric)
+                                df[['open','close','max','min']] = df[['open','close','max','min']].apply(pd.to_numeric)
                                 
-                                direction = get_strategy_signal(df)
+                                direction = get_smart_signal(df)
                                 if direction:
                                     asset_label = pair.replace("_otc", "-OTC").upper()
                                     t_time = (now + timedelta(minutes=1)).strftime('%H:%M')
@@ -139,13 +149,14 @@ def start_bot():
                                     msg = (f"🎯 <b>VIP SURESHOT SIGNAL</b>\n\n"
                                            f"💵 <b>ASSET  :</b> {asset_label}\n"
                                            f"📊 <b>SIGNAL :</b> {direction} {'🟢' if direction=='CALL' else '🔴'}\n"
+                                           f"💰 <b>PAYOUT :</b> {all_payouts.get(pair)}%\n"
                                            f"⏰ <b>TIME   :</b> {t_time} IST\n"
                                            f"🚀 <b>TYPE   :</b> DIRECT / MTG-1")
                                     
                                     send_telegram(msg, stk)
-                                    
                                     res = verify_result(pair, direction, q)
                                     stats['total'] += 1
+                                    
                                     if "WIN" in res:
                                         stats['win'] += 1
                                         send_telegram(f"✅ <b>{asset_label} {res}!!</b>", STICKER_ITM)
