@@ -49,38 +49,45 @@ def rsi_wilder(close, period=14):
 @app.route('/')
 def home():
     winrate = (stats['win'] / max(stats['total'], 1)) * 100
-    return f"V16.5 STABLE | Trades: {stats['total']} | WR: {winrate:.1f}%"
+    return f"V16.6 FIXED | Trades: {stats['total']} | WR: {winrate:.1f}%"
 
 def start_bot():
     global stats
     q = Quotex(email=QUOTEX_EMAIL, password=QUOTEX_PASSWORD)
-    session_active = False # Anti-Spam Flag
+    is_logged_in = False
+    bot_notified = False
 
     while True:
         try:
-            if not q.check_connect():
-                print("🔄 Connecting to Quotex...", flush=True)
+            if not is_logged_in:
+                print("🔄 Attempting login...", flush=True)
                 status, reason = q.connect()
-                
                 if status:
-                    print("✅ QUOTEX LOGIN SUCCESS!", flush=True)
-                    # Sirf ek baar message bhejega startup par
-                    if not session_active:
-                        send_telegram("🚀 <b>MASTER BOT V16.5 LIVE</b>\n━━━━━━━━━━━━━━\n✅ <b>Login:</b> Success\n📊 <b>Status:</b> Monitoring Markets...")
-                        session_active = True
-                    
+                    print("✅ LOGIN SUCCESS!", flush=True)
+                    is_logged_in = True
+                    if not bot_notified:
+                        send_telegram("🚀 <b>MASTER BOT V16.6 LIVE</b>\n━━━━━━━━━━━━━━\n✅ <b>Login:</b> Success\n📊 <b>Status:</b> Scanning Markets...")
+                        bot_notified = True
                     all_assets = q.get_all_asset_name()
                 else:
                     print(f"❌ Login failed: {reason}", flush=True)
                     time.sleep(20)
                     continue
 
-            # Main Trading Loop
+            # Check for 30-32 second window
             now = datetime.now(IST)
             if now.second in [30, 31, 32]:
-                current_pairs = all_assets if all_assets else ["EURUSD_otc", "GBPUSD_otc"]
+                # Dynamic check to see if we can still fetch candles (connection test)
+                try:
+                    current_pairs = q.get_all_asset_name()
+                    if not current_pairs:
+                        is_logged_in = False
+                        continue
+                except:
+                    is_logged_in = False
+                    continue
+
                 random.shuffle(current_pairs)
-                
                 for pair in current_pairs[:15]:
                     try:
                         candles = q.get_candles(pair, 60, 35, time.time())
@@ -102,7 +109,6 @@ def start_bot():
                             send_telegram(msg, STICKER_CALL if direction=="CALL" else STICKER_PUT)
                             stats['total'] += 1
                             
-                            # Result Verification
                             time.sleep(95)
                             check_candles = q.get_candles(pair, 60, 3, time.time())
                             if check_candles:
@@ -121,10 +127,11 @@ def start_bot():
             time.sleep(1)
 
         except Exception as e:
-            print(f"🚨 Error: {e}", flush=True)
+            print(f"🚨 Bot Error: {e}", flush=True)
+            is_logged_in = False # Force re-login on crash
             time.sleep(10)
 
 if __name__ == "__main__":
     Thread(target=lambda: app.run(host='0.0.0.0', port=10000), daemon=True).start()
     start_bot()
-                          
+    
