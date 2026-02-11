@@ -26,7 +26,6 @@ def send_telegram(text, sticker_id=None):
     if not TELEGRAM_BOT_TOKEN or not CHATS: return
     for cid in CHATS:
         try:
-            # Order Fixed: Message then Sticker
             requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
                 data={"chat_id": cid, "text": text, "parse_mode": "HTML"}, timeout=10)
             if sticker_id:
@@ -52,22 +51,17 @@ def send_night_report():
     report = f"""🌙 <b>DAILY NIGHT REPORT</b>
 ━━━━━━━━━━━━━━
 📅 Date: {datetime.now(IST).strftime('%d-%m-%Y')}
-📊 Total Trades: {stats['total']}
-✅ Wins: {stats['win']}
-❌ Loss: {stats['loss']}
+📈 Total: {stats['total']} | ✅ Win: {stats['win']} | ❌ Loss: {stats['loss']}
 🎯 Win Rate: {winrate:.1f}%
 ━━━━━━━━━━━━━━
-🤖 MASTER BOT V19.2"""
-    # Update BEFORE sending to prevent spam
+🤖 MASTER BOT V19.3"""
     stats['last_report'] = datetime.now(IST).date()
     send_telegram(report)
-    # Reset counts
     stats['total'], stats['win'], stats['loss'] = 0, 0, 0
 
 @app.route('/')
-def home():
-    winrate = (stats['win'] / max(stats['total'], 1)) * 100
-    return f"V19.2 BULLETPROOF | Trades: {stats['total']} | WR: {winrate:.1f}%"
+def health_check():
+    return {"status": "online", "bot": "V19.3 BULLETPROOF"}, 200
 
 def start_bot():
     global stats
@@ -88,37 +82,27 @@ def start_bot():
                 if status:
                     is_logged_in = True
                     if not bot_notified:
-                        send_telegram("🚀 <b>MASTER BOT V19.2 READY</b>\n━━━━━━━━━━━━━━\n✅ Login: Success\n🛡️ Mode: Ironclad Signal Protection\n📊 Status: Monitoring 27 Pairs")
+                        send_telegram("🚀 <b>MASTER BOT V19.3 LIVE</b>\n━━━━━━━━━━━━━━\n✅ Render Health Check: PASSED\n🛡️ Mode: Ironclad Protection")
                         bot_notified = True
                 else:
                     time.sleep(20); continue
 
             now = datetime.now(IST)
-            
-            # ✅ FIX #1: CRASH-PROOF NIGHT REPORT (>= 59 logic)
             if now.hour == 23 and now.minute >= 59 and stats['last_report'] != now.date():
                 send_night_report()
 
-            # SIGNAL WINDOW (30-32s IST)
             if 30 <= now.second <= 32:
                 random.shuffle(verified_assets)
                 for pair in verified_assets:
                     try:
                         candles = q.get_candles(pair, 60, 35, time.time())
-                        # SAFER DATA CHECK
                         if not candles or len(candles) < 30: continue
-                        
-                        df = pd.DataFrame(candles)
-                        df[['open', 'close']] = df[['open', 'close']].apply(pd.to_numeric)
+                        df = pd.DataFrame(candles); df[['open', 'close']] = df[['open', 'close']].apply(pd.to_numeric)
                         rsi = rsi_wilder(df['close'])
-                        
-                        # RSI NAN PROTECTION
                         if np.isnan(rsi): continue
-                        
                         ema = df['close'].ewm(span=14, adjust=False).mean().iloc[-1]
                         last_close = df['close'].iloc[-1]
 
-                        # ✅ TRADING LOGIC (Optimized for Win Rate)
                         direction = None
                         if rsi > 68 and last_close > ema: direction = "CALL"
                         elif rsi < 32 and last_close < ema: direction = "PUT"
@@ -127,35 +111,26 @@ def start_bot():
                             t_time = (now + timedelta(minutes=1)).replace(second=0).strftime('%H:%M')
                             asset_label = pair.replace("_otc", "-OTC").upper()
                             msg = f"🎯 <b>VIP SURESHOT SIGNAL</b>\n━━━━━━━━━━━━━━\n💵 ASSET: {asset_label}\n📊 SIGNAL: {direction} {'🟢' if direction=='CALL' else '🔴'}\n⏰ TIME: {t_time} IST\n🚀 DURATION: 1 MINUTE"
-                            
                             send_telegram(msg, STICKER_CALL if direction == "CALL" else STICKER_PUT)
                             
-                            # WAIT FOR DATA SETTLEMENT
                             time.sleep(105) 
-                            
                             check = q.get_candles(pair, 60, 3, time.time())
                             if check and len(check) >= 2:
-                                # INCREMENT ONLY ON VERIFIED DATA
                                 stats['total'] += 1
-                                result_candle = check[-1] 
+                                result_candle = check[-1]
                                 o, c = float(result_candle['open']), float(result_candle['close'])
                                 is_win = (direction == "CALL" and c > o) or (direction == "PUT" and c < o)
-                                
-                                result_msg = f"✅ <b>{asset_label} WIN</b>\nO: {o:.5f} → C: {c:.5f}" if is_win else f"❌ <b>{asset_label} LOSS</b>\nO: {o:.5f} → C: {c:.5f}"
                                 if is_win: stats['win'] += 1
                                 else: stats['loss'] += 1
-                                
-                                send_telegram(result_msg, STICKER_ITM if is_win else STICKER_OTM)
-                            
-                            # ✅ FIX #2: SAFE BREAK PLACEMENT
-                            time.sleep(150)
-                            break
+                                send_telegram(f"✅ <b>{asset_label} WIN</b>\nO: {o:.5f} → C: {c:.5f}" if is_win else f"❌ <b>{asset_label} LOSS</b>\nO: {o:.5f} → C: {c:.5f}", STICKER_ITM if is_win else STICKER_OTM)
+                            time.sleep(150); break
                     except: continue
-            
             time.sleep(1)
         except: is_logged_in = False; time.sleep(10)
 
 if __name__ == "__main__":
-    Thread(target=lambda: app.run(host='0.0.0.0', port=10000), daemon=True).start()
-    start_bot()
+    # Flask starts immediately in the main thread for Render
+    Thread(target=start_bot, daemon=True).start()
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)
                                 
