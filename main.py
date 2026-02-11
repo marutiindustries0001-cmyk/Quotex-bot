@@ -49,80 +49,82 @@ def rsi_wilder(close, period=14):
 @app.route('/')
 def home():
     winrate = (stats['win'] / max(stats['total'], 1)) * 100
-    return f"V16.4 STABLE | Trades: {stats['total']} | WR: {winrate:.1f}%"
+    return f"V16.5 STABLE | Trades: {stats['total']} | WR: {winrate:.1f}%"
 
 def start_bot():
     global stats
     q = Quotex(email=QUOTEX_EMAIL, password=QUOTEX_PASSWORD)
-    
+    session_active = False # Anti-Spam Flag
+
     while True:
         try:
-            print("🔄 Attempting login...", flush=True)
-            status, reason = q.connect()
-            
-            if status:
-                print("✅ QUOTEX LOGIN SUCCESS! Starting scanner...", flush=True)
-                send_telegram("🚀 <b>MASTER BOT V16.4 LIVE</b>\n━━━━━━━━━━━━━━\n✅ <b>Login:</b> Success\n📊 <b>Status:</b> Scanning Started...")
+            if not q.check_connect():
+                print("🔄 Connecting to Quotex...", flush=True)
+                status, reason = q.connect()
                 
-                # Fetch Assets Once
-                all_assets = q.get_all_asset_name()
+                if status:
+                    print("✅ QUOTEX LOGIN SUCCESS!", flush=True)
+                    # Sirf ek baar message bhejega startup par
+                    if not session_active:
+                        send_telegram("🚀 <b>MASTER BOT V16.5 LIVE</b>\n━━━━━━━━━━━━━━\n✅ <b>Login:</b> Success\n📊 <b>Status:</b> Monitoring Markets...")
+                        session_active = True
+                    
+                    all_assets = q.get_all_asset_name()
+                else:
+                    print(f"❌ Login failed: {reason}", flush=True)
+                    time.sleep(20)
+                    continue
+
+            # Main Trading Loop
+            now = datetime.now(IST)
+            if now.second in [30, 31, 32]:
+                current_pairs = all_assets if all_assets else ["EURUSD_otc", "GBPUSD_otc"]
+                random.shuffle(current_pairs)
                 
-                while True: # Trading loop (Jab tak connected hai)
-                    if not q.check_connect(): # Agar connection toota
-                        print("⚠️ Connection lost. Reconnecting...", flush=True)
-                        break 
+                for pair in current_pairs[:15]:
+                    try:
+                        candles = q.get_candles(pair, 60, 35, time.time())
+                        if not candles or len(candles) < 25: continue
                         
-                    now = datetime.now(IST)
-                    if now.second in [30, 31, 32]:
-                        current_pairs = all_assets if all_assets else ["EURUSD_otc", "GBPUSD_otc"]
-                        random.shuffle(current_pairs)
+                        df = pd.DataFrame(candles)
+                        df[['open', 'close']] = df[['open', 'close']].apply(pd.to_numeric)
+                        rsi = rsi_wilder(df['close'])
+                        ema = df['close'].ewm(span=14, adjust=False).mean().iloc[-1]
                         
-                        for pair in current_pairs[:15]:
-                            try:
-                                candles = q.get_candles(pair, 60, 35, time.time())
-                                if not candles or len(candles) < 25: continue
-                                
-                                df = pd.DataFrame(candles)
-                                df[['open', 'close']] = df[['open', 'close']].apply(pd.to_numeric)
-                                rsi = rsi_wilder(df['close'])
-                                ema = df['close'].ewm(span=14, adjust=False).mean().iloc[-1]
-                                
-                                direction = None
-                                if df['close'].iloc[-1] > ema and rsi > 52: direction = "CALL"
-                                elif df['close'].iloc[-1] < ema and rsi < 48: direction = "PUT"
-                                
-                                if direction:
-                                    t_time = (now + timedelta(minutes=1)).strftime('%H:%M')
-                                    asset_label = pair.replace("_otc", "-OTC").upper()
-                                    msg = f"🎯 <b>VIP SURESHOT SIGNAL</b>\n━━━━━━━━━━━━━━\n💵 <b>ASSET:</b> {asset_label}\n📊 <b>SIGNAL:</b> {direction} {'🟢' if direction=='CALL' else '🔴'}\n⏰ <b>TIME:</b> {t_time} IST\n🚀 <b>TYPE:</b> Direct / MTG-1"
-                                    send_telegram(msg, STICKER_CALL if direction=="CALL" else STICKER_PUT)
-                                    stats['total'] += 1
-                                    
-                                    # Result Verification
-                                    time.sleep(95)
-                                    check_candles = q.get_candles(pair, 60, 3, time.time())
-                                    if check_candles:
-                                        last = check_candles[-1]
-                                        o, c = float(last['open']), float(last['close'])
-                                        res = "WIN" if (direction=="CALL" and c>o) or (direction=="PUT" and c<o) else "LOSS"
-                                        if res == "WIN":
-                                            stats['win'] += 1
-                                            send_telegram(f"✅ <b>{asset_label} WIN!!</b>", STICKER_ITM)
-                                        else:
-                                            stats['loss'] += 1
-                                            send_telegram(f"❌ <b>{asset_label} LOSS</b>", STICKER_OTM)
-                                    time.sleep(150)
-                                    break
-                            except: continue
-                    time.sleep(1)
-            else:
-                print(f"❌ Login failed: {reason}. Retrying in 15s...", flush=True)
-                time.sleep(15)
+                        direction = None
+                        if df['close'].iloc[-1] > ema and rsi > 52: direction = "CALL"
+                        elif df['close'].iloc[-1] < ema and rsi < 48: direction = "PUT"
+                        
+                        if direction:
+                            t_time = (now + timedelta(minutes=1)).strftime('%H:%M')
+                            asset_label = pair.replace("_otc", "-OTC").upper()
+                            msg = f"🎯 <b>VIP SURESHOT SIGNAL</b>\n━━━━━━━━━━━━━━\n💵 <b>ASSET:</b> {asset_label}\n📊 <b>SIGNAL:</b> {direction} {'🟢' if direction=='CALL' else '🔴'}\n⏰ <b>TIME:</b> {t_time} IST\n🚀 <b>TYPE:</b> Direct / MTG-1"
+                            send_telegram(msg, STICKER_CALL if direction=="CALL" else STICKER_PUT)
+                            stats['total'] += 1
+                            
+                            # Result Verification
+                            time.sleep(95)
+                            check_candles = q.get_candles(pair, 60, 3, time.time())
+                            if check_candles:
+                                last = check_candles[-1]
+                                o, c = float(last['open']), float(last['close'])
+                                res = "WIN" if (direction=="CALL" and c>o) or (direction=="PUT" and c<o) else "LOSS"
+                                if res == "WIN":
+                                    stats['win'] += 1
+                                    send_telegram(f"✅ <b>{asset_label} WIN!!</b>", STICKER_ITM)
+                                else:
+                                    stats['loss'] += 1
+                                    send_telegram(f"❌ <b>{asset_label} LOSS</b>", STICKER_OTM)
+                            time.sleep(150)
+                            break
+                    except: continue
+            time.sleep(1)
+
         except Exception as e:
-            print(f"🚨 Fatal Error: {e}", flush=True)
+            print(f"🚨 Error: {e}", flush=True)
             time.sleep(10)
 
 if __name__ == "__main__":
     Thread(target=lambda: app.run(host='0.0.0.0', port=10000), daemon=True).start()
     start_bot()
-            
+                          
