@@ -27,8 +27,7 @@ STICKER_ITM = "CAACAgUAAxkBAAEQQoppa364FzxNIASmRZkpvYGvdo3l8QACjgwAAjiMQVdc4NyQY
 STICKER_OTM = "CAACAgUAAxkBAAEQQoxpa38lMmyAxq3Rj7DIJz0Sx4CGlgACgh4AAnSoUVd08ZdnRO6rxTgE"
 
 def send_telegram(text, sticker_id=None):
-    if not TELEGRAM_BOT_TOKEN or not CHATS: 
-        return
+    if not TELEGRAM_BOT_TOKEN or not CHATS: return
     for cid in CHATS:
         try:
             requests.post(
@@ -44,7 +43,23 @@ def send_telegram(text, sticker_id=None):
                     timeout=10
                 )
         except Exception as e:
-            logger.error(f"Telegram error: {e}")
+            print(f"Telegram Error: {e}")
+
+def send_daily_report():
+    now = datetime.now(IST)
+    if now.hour == 0 and now.minute == 0:
+        winrate = (stats['win'] / max(stats['total'], 1)) * 100
+        report = f"""📊 <b>DAILY TRADING REPORT</b>
+━━━━━━━━━━━━━━
+📈 <b>Total Signals:</b> {stats['total']}
+✅ <b>Wins:</b> {stats['win']}
+❌ <b>Losses:</b> {stats['loss']}
+🎯 <b>Winrate:</b> {winrate:.1f}%
+━━━━━━━━━━━━━━
+🛡️ Bot: V15.5 REAL+OTC | Next signals soon!"""
+        send_telegram(report)
+        stats['total'], stats['win'], stats['loss'] = 0, 0, 0
+        stats['last_reset'] = now.date()
 
 def rsi_wilder(close, period=14):
     try:
@@ -53,64 +68,69 @@ def rsi_wilder(close, period=14):
         loss = -delta.where(delta < 0, 0)
         avg_gain = gain.ewm(alpha=1/period, min_periods=period).mean()
         avg_loss = loss.ewm(alpha=1/period, min_periods=period).mean()
-        rs = avg_gain / avg_loss
+        rs = avg_gain.iloc[-1] / avg_loss.iloc[-1]
         rsi = 100 - (100 / (1 + rs))
-        return rsi.iloc[-1]
-    except:
-        return np.nan
+        return rsi
+    except: return np.nan
 
 def verify_result_accurate(pair, direction, q):
-    # FIXED: Increased wait to 100s because signal comes at 25th second
-    # (35s pre-trade + 60s trade + 5s buffer)
     time.sleep(100)
     try:
-        candles = q.get_candles(pair, 60, 1, time.time())
+        candles = q.get_candles(pair, 60, 3, time.time())
         if candles:
-            last = candles[0]
+            last = candles[-1]
             o, c = float(last['open']), float(last['close'])
-            if direction == "CALL":
-                return "WIN" if c > o else "LOSS"
-            else:
-                return "WIN" if c < o else "LOSS"
-    except:
-        pass
+            if direction == "CALL": return "WIN" if c > o else "LOSS"
+            else: return "WIN" if c < o else "LOSS"
+    except: pass
     return "LOSS"
 
 @app.route('/')
 def home():
-    winrate = (stats['win']/max(stats['total'],1))*100
-    return f"V15.1 ACTIVE | Trades: {stats['total']} | WR: {winrate:.1f}%"
+    winrate = (stats['win'] / max(stats['total'], 1)) * 100
+    return f"V15.5 REAL+OTC | Signals: {stats['total']} | WR: {winrate:.1f}%"
 
 def start_bot():
     global stats
-    q = Quotex(email=QUOTEX_EMAIL, password=QUOTEX_PASSWORD)
+    q = None
+    bot_notified = False
     
-    high_payout_pairs = [
+    # 🔥 COMBINED ASSET LIST (REAL + OTC)
+    all_pairs = [
+        # REAL PAIRS
+        "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "EURGBP", 
+        "USDCAD", "USDCHF", "NZDUSD", "EURJPY", "GBPJPY",
+        # OTC PAIRS
         "EURUSD_otc", "GBPUSD_otc", "USDJPY_otc", "AUDUSD_otc", "EURJPY_otc",
-        "XAUUSD_otc", "BTCUSD_otc", "USDINR_otc", "GBPJPY_otc", "AUDNZD_otc",
-        "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "EURGBP", "USDCAD"
+        "GBPJPY_otc", "AUDNZD_otc", "CHFJPY_otc", "NZDUSD_otc", "USDCAD_otc",
+        "USDINR_otc", "USDBRL_otc", "USDMXN_otc", "USDCHF_otc", "EURGBP_otc",
+        "XAUUSD_otc", "BTCUSD_otc", "APPLE_otc", "GOOGLE_otc", "TESLA_otc"
     ]
     
     while True:
         try:
-            status, _ = q.connect()
+            send_daily_report()
+            if not q: q = Quotex(email=QUOTEX_EMAIL, password=QUOTEX_PASSWORD)
+            status, reason = q.connect()
+            
             if status:
-                # FIXED: Triple quotes for multiline string
-                send_telegram("""💎 <b>MASTER BOT V15.1 REAL+OTC LIVE</b>
+                if not bot_notified:
+                    send_telegram("""🚀 <b>MASTER BOT V15.5 REAL+OTC LIVE</b>
 ━━━━━━━━━━━━━━
-✅ 25+ High Payout Pairs
-🚀 REAL + OTC Active""")
+✅ <b>35+ Total Pairs</b> (Real & OTC)
+🕐 <b>Signals:</b> XX:XX:30-32 IST
+📊 <b>Daily Report:</b> 12AM IST
+🛡️ <b>Status:</b> ACTIVE""")
+                    bot_notified = True
                 
                 while True:
                     now = datetime.now(IST)
-                    
-                    if now.second in [25, 26, 27]:
-                        random.shuffle(high_payout_pairs)
-                        for pair in high_payout_pairs[:8]:
+                    if now.second in [30, 31, 32]:
+                        random.shuffle(all_pairs)
+                        for pair in all_pairs[:10]:
                             try:
                                 candles = q.get_candles(pair, 60, 35, time.time())
-                                if not candles: continue
-                                
+                                if not candles or len(candles) < 25: continue
                                 df = pd.DataFrame(candles)
                                 df[['open', 'close']] = df[['open', 'close']].apply(pd.to_numeric)
                                 rsi = rsi_wilder(df['close'])
@@ -123,7 +143,6 @@ def start_bot():
                                 if direction:
                                     t_time = (now + timedelta(minutes=1)).strftime('%H:%M')
                                     asset_label = pair.replace("_otc", "-OTC").upper()
-                                    
                                     msg = f"""🎯 <b>VIP SURESHOT SIGNAL</b>
 ━━━━━━━━━━━━━━
 💵 <b>ASSET  :</b> {asset_label}
@@ -131,26 +150,27 @@ def start_bot():
 ⏰ <b>TIME   :</b> {t_time} IST
 🚀 <b>TYPE   :</b> Direct / MTG-1
 ━━━━━━━━━━━━━━"""
-                                    
                                     send_telegram(msg, STICKER_CALL if direction == "CALL" else STICKER_PUT)
                                     stats['total'] += 1
-                                    
                                     res = verify_result_accurate(pair, direction, q)
                                     if res == "WIN":
                                         stats['win'] += 1
-                                        send_telegram(f"✅ <b>{asset_label} WIN!!</b>", STICKER_ITM)
+                                        send_telegram(f"✅ <b>{asset_label} WIN!!</b>\n💰 <b>RESULT CONFIRMED</b>", STICKER_ITM)
                                     else:
                                         stats['loss'] += 1
-                                        send_telegram(f"❌ <b>{asset_label} LOSS</b>", STICKER_OTM)
-                                    
+                                        send_telegram(f"❌ <b>{asset_label} LOSS</b>\n📊 <b>RESULT CONFIRMED</b>", STICKER_OTM)
                                     time.sleep(150)
                                     break
                             except: continue
                     time.sleep(1)
-            else: time.sleep(10)
-        except: time.sleep(5)
+            else:
+                q = None
+                time.sleep(15)
+        except Exception as e:
+            q = None
+            time.sleep(10)
 
 if __name__ == "__main__":
     Thread(target=lambda: app.run(host='0.0.0.0', port=10000), daemon=True).start()
     start_bot()
-                                
+                
