@@ -49,40 +49,36 @@ def rsi_wilder(close, period=14):
 @app.route('/')
 def home():
     winrate = (stats['win'] / max(stats['total'], 1)) * 100
-    return f"V16.3 NO-PAYOUT-LIMIT | Trades: {stats['total']} | WR: {winrate:.1f}%"
+    return f"V16.4 STABLE | Trades: {stats['total']} | WR: {winrate:.1f}%"
 
 def start_bot():
     global stats
-    q = None
-    bot_notified = False
-
+    q = Quotex(email=QUOTEX_EMAIL, password=QUOTEX_PASSWORD)
+    
     while True:
         try:
-            if not q: q = Quotex(email=QUOTEX_EMAIL, password=QUOTEX_PASSWORD)
+            print("🔄 Attempting login...", flush=True)
             status, reason = q.connect()
             
             if status:
-                print("✅ QUOTEX LOGIN SUCCESS!", flush=True)
-                # Available assets automatic uthayega
+                print("✅ QUOTEX LOGIN SUCCESS! Starting scanner...", flush=True)
+                send_telegram("🚀 <b>MASTER BOT V16.4 LIVE</b>\n━━━━━━━━━━━━━━\n✅ <b>Login:</b> Success\n📊 <b>Status:</b> Scanning Started...")
+                
+                # Fetch Assets Once
                 all_assets = q.get_all_asset_name()
                 
-                if not bot_notified:
-                    send_telegram(f"""🚀 <b>MASTER BOT V16.3 LIVE</b>
-━━━━━━━━━━━━━━
-✅ <b>LOGIN: SUCCESS</b>
-🛡️ <b>PAYOUT FILTER: REMOVED</b>
-⚡ <b>MODE: HIGH FREQUENCY</b>""")
-                    bot_notified = True
-                
-                while True:
+                while True: # Trading loop (Jab tak connected hai)
+                    if not q.check_connect(): # Agar connection toota
+                        print("⚠️ Connection lost. Reconnecting...", flush=True)
+                        break 
+                        
                     now = datetime.now(IST)
                     if now.second in [30, 31, 32]:
-                        current_pairs = all_assets if all_assets else ["EURUSD_otc", "GBPUSD_otc", "USDJPY_otc"]
+                        current_pairs = all_assets if all_assets else ["EURUSD_otc", "GBPUSD_otc"]
                         random.shuffle(current_pairs)
                         
                         for pair in current_pairs[:15]:
                             try:
-                                # Payout check wali saari lines hata di hain ✅
                                 candles = q.get_candles(pair, 60, 35, time.time())
                                 if not candles or len(candles) < 25: continue
                                 
@@ -98,19 +94,11 @@ def start_bot():
                                 if direction:
                                     t_time = (now + timedelta(minutes=1)).strftime('%H:%M')
                                     asset_label = pair.replace("_otc", "-OTC").upper()
-                                    
-                                    # Payout display bhi hata diya taaki confusion na ho
-                                    msg = f"""🎯 <b>VIP SURESHOT SIGNAL</b>
-━━━━━━━━━━━━━━
-💵 <b>ASSET:</b> {asset_label}
-📊 <b>SIGNAL:</b> {direction} {'🟢' if direction=='CALL' else '🔴'}
-⏰ <b>TIME:</b> {t_time} IST
-🚀 <b>TYPE:</b> Direct / MTG-1
-━━━━━━━━━━━━━━"""
+                                    msg = f"🎯 <b>VIP SURESHOT SIGNAL</b>\n━━━━━━━━━━━━━━\n💵 <b>ASSET:</b> {asset_label}\n📊 <b>SIGNAL:</b> {direction} {'🟢' if direction=='CALL' else '🔴'}\n⏰ <b>TIME:</b> {t_time} IST\n🚀 <b>TYPE:</b> Direct / MTG-1"
                                     send_telegram(msg, STICKER_CALL if direction=="CALL" else STICKER_PUT)
                                     stats['total'] += 1
                                     
-                                    # Verification
+                                    # Result Verification
                                     time.sleep(95)
                                     check_candles = q.get_candles(pair, 60, 3, time.time())
                                     if check_candles:
@@ -128,13 +116,13 @@ def start_bot():
                             except: continue
                     time.sleep(1)
             else:
-                q = None
+                print(f"❌ Login failed: {reason}. Retrying in 15s...", flush=True)
                 time.sleep(15)
         except Exception as e:
-            q = None
+            print(f"🚨 Fatal Error: {e}", flush=True)
             time.sleep(10)
 
 if __name__ == "__main__":
     Thread(target=lambda: app.run(host='0.0.0.0', port=10000), daemon=True).start()
     start_bot()
-               
+            
