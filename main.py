@@ -49,13 +49,27 @@ def rsi_wilder(close, period=14):
 @app.route('/')
 def home():
     winrate = (stats['win'] / max(stats['total'], 1)) * 100
-    return f"V16.6 FIXED | Trades: {stats['total']} | WR: {winrate:.1f}%"
+    return f"V16.8 MAX-OTC | Trades: {stats['total']} | WR: {winrate:.1f}%"
 
 def start_bot():
     global stats
     q = Quotex(email=QUOTEX_EMAIL, password=QUOTEX_PASSWORD)
     is_logged_in = False
     bot_notified = False
+
+    # 🔥 EXTENDED OTC & REAL ASSET LIST
+    stable_assets = [
+        # REAL PAIRS
+        "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "EURJPY", "GBPJPY", "USDCAD",
+        # OTC CURRENCY PAIRS (MAX ADDED)
+        "EURUSD_otc", "GBPUSD_otc", "USDJPY_otc", "AUDUSD_otc", "EURJPY_otc", 
+        "GBPJPY_otc", "USDINR_otc", "USDBRL_otc", "USDMXN_otc", "USDPKR_otc",
+        "USDTRY_otc", "USDEGP_otc", "USDZAR_otc", "USDMAD_otc", "USDIDR_otc",
+        "NZDUSD_otc", "USDCAD_otc", "USDCHF_otc", "EURGBP_otc", "AUDCAD_otc",
+        "AUDNZD_otc", "CHFJPY_otc", "CADJPY_otc", "EURCAD_otc", "GBPCAD_otc",
+        # METALS/CRYPTO
+        "XAUUSD_otc", "BTCUSD_otc"
+    ]
 
     while True:
         try:
@@ -66,29 +80,18 @@ def start_bot():
                     print("✅ LOGIN SUCCESS!", flush=True)
                     is_logged_in = True
                     if not bot_notified:
-                        send_telegram("🚀 <b>MASTER BOT V16.6 LIVE</b>\n━━━━━━━━━━━━━━\n✅ <b>Login:</b> Success\n📊 <b>Status:</b> Scanning Markets...")
+                        send_telegram(f"🚀 <b>MASTER BOT V16.8 MAX-OTC LIVE</b>\n━━━━━━━━━━━━━━\n✅ <b>Login:</b> Success\n📊 <b>Pairs Added:</b> {len(stable_assets)}\n🛡️ <b>Status:</b> Scanning...")
                         bot_notified = True
-                    all_assets = q.get_all_asset_name()
                 else:
                     print(f"❌ Login failed: {reason}", flush=True)
                     time.sleep(20)
                     continue
 
-            # Check for 30-32 second window
             now = datetime.now(IST)
             if now.second in [30, 31, 32]:
-                # Dynamic check to see if we can still fetch candles (connection test)
-                try:
-                    current_pairs = q.get_all_asset_name()
-                    if not current_pairs:
-                        is_logged_in = False
-                        continue
-                except:
-                    is_logged_in = False
-                    continue
-
-                random.shuffle(current_pairs)
-                for pair in current_pairs[:15]:
+                random.shuffle(stable_assets)
+                # Scanning top 18 pairs for better frequency
+                for pair in stable_assets[:18]:
                     try:
                         candles = q.get_candles(pair, 60, 35, time.time())
                         if not candles or len(candles) < 25: continue
@@ -128,10 +131,10 @@ def start_bot():
 
         except Exception as e:
             print(f"🚨 Bot Error: {e}", flush=True)
-            is_logged_in = False # Force re-login on crash
+            is_logged_in = False
             time.sleep(10)
 
 if __name__ == "__main__":
     Thread(target=lambda: app.run(host='0.0.0.0', port=10000), daemon=True).start()
     start_bot()
-    
+                        
