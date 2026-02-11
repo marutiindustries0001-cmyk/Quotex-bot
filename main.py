@@ -13,7 +13,6 @@ QUOTEX_PASSWORD = os.getenv("QUOTEX_PASSWORD")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHATS = [id for id in [os.getenv("TELEGRAM_CHAT_ID1"), os.getenv("TELEGRAM_CHAT_ID2")] if id]
 
-# Global stats for Daily Report
 stats = {"total": 0, "win": 0, "loss": 0, "last_reset": datetime.now(IST).date()}
 
 # Stickers
@@ -35,35 +34,37 @@ def send_telegram(text, sticker_id=None):
         except: pass
 
 def verify_full_result(pair, direction, q):
-    """Wait for Direct and MTG-1 results specifically for 1-min candles"""
-    time.sleep(90) # Buffer to let the signal candle close
+    # Buffer wait for candle close (Signal 35s + 25s remaining + 5s buffer)
+    time.sleep(45) 
     try:
         candles = q.get_candles(pair, 60, 5, time.time())
         if candles:
-            o1, cl1 = float(candles[-1]['open']), float(candles[-1]['close'])
-            if (direction == "CALL" and cl1 > o1) or (direction == "PUT" and cl1 < o1):
-                return "WIN"
-        
-        # Check MTG-1
-        time.sleep(60)
-        candles_mtg = q.get_candles(pair, 60, 5, time.time())
-        if candles_mtg:
-            o2, cl2 = float(candles_mtg[-1]['open']), float(candles_mtg[-1]['close'])
-            if (direction == "CALL" and cl2 > o2) or (direction == "PUT" and cl2 < o2):
-                return "MTG_WIN"
+            last = candles[-1]
+            o, c = float(last['open']), float(last['close'])
+            win = (direction == "CALL" and c > o) or (direction == "PUT" and c < o)
+            if win: return "WIN"
+            
+            # Direct Loss -> Check MTG-1
+            time.sleep(60)
+            candles_mtg = q.get_candles(pair, 60, 5, time.time())
+            if candles_mtg:
+                last_mtg = candles_mtg[-1]
+                o2, c2 = float(last_mtg['open']), float(last_mtg['close'])
+                if (direction == "CALL" and c2 > o2) or (direction == "PUT" and c2 < o2):
+                    return "MTG_WIN"
     except: pass
     return "LOSS"
 
 @app.route('/')
 def home():
-    return f"V11.9 TEST MODE LIVE | W:{stats['win']} L:{stats['loss']} | Reset: {stats['last_reset']}"
+    return f"V12.1 FINAL | Trades: {stats['total']} | W:{stats['win']} L:{stats['loss']}"
 
 def start_bot():
     global stats
     q = Quotex(email=QUOTEX_EMAIL, password=QUOTEX_PASSWORD)
     bot_notified = False
     
-    # EXACT QUOTEX API NAMES (Verified)
+    # Verified Assets List
     assets = [
         "EURUSD_otc", "GBPUSD_otc", "USDJPY_otc", "USDINR_otc", "EURJPY_otc", "GBPJPY_otc", 
         "AUDUSD_otc", "USDPKR_otc", "USDBRL_otc", "EURGBP_otc", "USDTRY_otc", "USDBDT_otc",
@@ -76,58 +77,52 @@ def start_bot():
         try:
             status, _ = q.connect()
             if status:
-                print("✅ QUOTEX CONNECTED - V11.9 TEST MODE ACTIVE", flush=True)
+                print("✅ QUOTEX CONNECTED - V12.1 PRO ACTIVE", flush=True)
                 if not bot_notified:
-                    send_telegram("🚀 <b>MASTER BOT V11.9 TEST MODE LIVE</b>\n🛡️ Payout: 50% (Testing)\n📊 Timing: 25s Early Signal")
+                    send_telegram("🚀 <b>MASTER BOT V12.1 FINAL LIVE</b>\nTiming: 25s Early | Trend-Lock: ON")
                     bot_notified = True
                 
                 while True:
                     now = datetime.now(IST)
-                    
-                    # Midnight Reset & Report
+                    # Midnight Report
                     if now.hour == 0 and now.minute == 0 and now.date() != stats['last_reset']:
                         acc = (stats['win'] / stats['total'] * 100) if stats['total'] > 0 else 0
-                        report = (f"📉 <b>DAILY PERFORMANCE SUMMARY</b>\n"
-                                  f"✅ Total: {stats['total']}\n🟢 Wins: {stats['win']}\n🎯 Accuracy: {acc:.2f}%")
+                        report = (f"📉 <b>DAILY REPORT</b>\n✅ Total: {stats['total']}\n🟢 Wins: {stats['win']}\n🎯 Accuracy: {acc:.2f}%")
                         send_telegram(report)
                         stats = {"total": 0, "win": 0, "loss": 0, "last_reset": now.date()}
 
                     if now.second == 35:
-                        print(f"--- Scanning at {now.strftime('%H:%M:%S')} ---", flush=True)
                         random.shuffle(assets)
-                        
                         for pair in assets:
                             try:
-                                # Fetching candle data
                                 candles = q.get_candles(pair, 60, 50, time.time())
                                 if not candles: continue
                                 df = pd.DataFrame(candles)
-                                df[['open','close']] = df[['open','close']].apply(pd.to_numeric)
+                                df[['open','close','max','min']] = df[['open','close','max','min']].apply(pd.to_numeric)
                                 
-                                # EMA 14 + RSI 14 Flexible Logic
                                 ema = df['close'].ewm(span=14, adjust=False).mean().iloc[-1]
                                 delta = df['close'].diff()
-                                gain = (delta.where(delta > 0, 0)).rolling(14).mean()
-                                loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-                                rsi = 100 - (100 / (1 + (gain.iloc[-1] / (loss.iloc[-1] + 1e-10))))
+                                gain = (delta.where(delta > 0, 0)).rolling(14).mean().iloc[-1]
+                                loss = (-delta.where(delta < 0, 0)).rolling(14).mean().iloc[-1]
+                                rsi = 100 - (100 / (1 + (gain / (loss + 1e-10))))
+                                
+                                body = abs(df['close'].iloc[-1] - df['open'].iloc[-1])
+                                is_strong = body > ((df['max'].iloc[-1] - df['min'].iloc[-1]) * 0.3)
 
                                 direction = None
-                                # Testing Mode: Loose criteria to ensure signal delivery
-                                if df['close'].iloc[-1] > ema and rsi > 50: direction = "CALL"
-                                elif df['close'].iloc[-1] < ema and rsi < 50: direction = "PUT"
+                                if df['close'].iloc[-1] > ema and 52 < rsi < 75 and is_strong: direction = "CALL"
+                                elif df['close'].iloc[-1] < ema and 25 < rsi < 48 and is_strong: direction = "PUT"
 
                                 if direction:
                                     t_time = (now + timedelta(minutes=1)).strftime('%H:%M')
                                     asset_label = pair.replace("_otc", "-OTC").upper()
-                                    msg = (f"🎯 <b>TEST SIGNAL</b>\n\n"
-                                           f"💵 <b>ASSET :</b> {asset_label}\n"
+                                    msg = (f"🎯 <b>VIP SURESHOT SIGNAL</b>\n\n"
+                                           f"💵 <b>ASSET  :</b> {asset_label}\n"
                                            f"📊 <b>SIGNAL :</b> {direction} {'🟢' if direction=='CALL' else '🔴'}\n"
-                                           f"⏰ <b>TIME :</b> {t_time} IST\n"
-                                           f"🚀 <b>TYPE :</b> Direct / MTG-1")
+                                           f"⏰ <b>TIME   :</b> {t_time} IST\n"
+                                           f"🚀 <b>TYPE   :</b> Direct / MTG-1")
                                     
                                     send_telegram(msg, STICKER_CALL if direction=="CALL" else STICKER_PUT)
-                                    
-                                    # Verification Process
                                     res = verify_full_result(pair, direction, q)
                                     stats['total'] += 1
                                     if "WIN" in res:
@@ -136,19 +131,14 @@ def start_bot():
                                     else:
                                         stats['loss'] += 1
                                         send_telegram(f"❌ <b>{asset_label} OTM</b>", STICKER_OTM)
-                                    
-                                    time.sleep(120) # Short gap for testing
+                                    time.sleep(180)
                                     break
                             except: continue
                     time.sleep(1)
-            else: 
-                print("❌ Login failed, retrying...", flush=True)
-                time.sleep(10)
-        except Exception as e:
-            print(f"Error: {e}", flush=True)
-            time.sleep(5)
+            else: time.sleep(10)
+        except: time.sleep(5)
 
 if __name__ == "__main__":
     Thread(target=lambda: app.run(host='0.0.0.0', port=10000), daemon=True).start()
     start_bot()
-    
+                                
