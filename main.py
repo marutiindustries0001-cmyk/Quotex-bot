@@ -11,15 +11,13 @@ app = Flask(__name__)
 
 @app.route('/')
 def health():
-    return jsonify(status="online", version="V19.8", time=datetime.now(IST).strftime('%H:%M:%S')), 200
+    return jsonify(status="online", version="V19.9", type="Real-Price-Fix"), 200
 
-# Credentials & Connection
 QUOTEX_EMAIL = os.getenv("QUOTEX_EMAIL")
 QUOTEX_PASSWORD = os.getenv("QUOTEX_PASSWORD")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHATS = [id for id in [os.getenv("TELEGRAM_CHAT_ID1"), os.getenv("TELEGRAM_CHAT_ID2")] if id]
 
-# ✅ NEW: Stickers from .env
 STICKER_CALL = os.getenv("STICKER_CALL")
 STICKER_PUT = os.getenv("STICKER_PUT")
 STICKER_ITM = os.getenv("STICKER_ITM")
@@ -31,8 +29,9 @@ def send_telegram(text, sticker_id=None):
     if not TELEGRAM_BOT_TOKEN or not CHATS: return
     for cid in CHATS:
         try:
-            requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-                data={"chat_id": cid, "text": text, "parse_mode": "HTML"}, timeout=10)
+            if text: # Send text only if not empty
+                requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                    data={"chat_id": cid, "text": text, "parse_mode": "HTML"}, timeout=10)
             if sticker_id:
                 time.sleep(0.4)
                 requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendSticker",
@@ -50,29 +49,13 @@ def rsi_wilder(close, period=14):
         return 100 - (100 / (1 + (avg_gain / avg_loss)))
     except: return np.nan
 
-def send_night_report():
-    global stats
-    winrate = (stats['win'] / max(stats['total'], 1)) * 100
-    report = (
-        f"🌙 <b>DAILY NIGHT REPORT</b>\n"
-        f"━━━━━━━━━━━━━━\n"
-        f"📅 Date: {datetime.now(IST).strftime('%d-%m-%Y')}\n"
-        f"📈 Total Trades: {stats['total']}\n"
-        f"✅ Wins: {stats['win']}\n"
-        f"❌ Loss: {stats['loss']}\n"
-        f"🎯 Win Rate: {winrate:.1f}%"
-    )
-    stats['last_report'] = datetime.now(IST).date()
-    send_telegram(report)
-    stats['total'], stats['win'], stats['loss'] = 0, 0, 0
-
 def start_bot():
     global stats
     q = Quotex(email=QUOTEX_EMAIL, password=QUOTEX_PASSWORD)
     is_logged_in, bot_notified = False, False
 
     verified_assets = [
-        "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "EURJPY", "GBPJPY", "USDCAD", "EURGBP",
+        "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "EURJPY", "GBPJPY", "USDCAD",
         "EURUSD_otc", "GBPUSD_otc", "USDJPY_otc", "AUDUSD_otc", "EURJPY_otc", 
         "GBPJPY_otc", "USDINR_otc", "USDBRL_otc", "USDMXN_otc", "USDPKR_otc",
         "NZDUSD_otc", "USDCAD_otc", "XAUUSD_otc"
@@ -85,22 +68,28 @@ def start_bot():
                 if status:
                     is_logged_in = True
                     if not bot_notified:
-                        send_telegram("🚀 <b>MASTER BOT V19.8 READY</b>\n━━━━━━━━━━━━━━\n✅ System: Online\n📁 Config: Loaded from Environment\n🌙 Night Report: Safe Window Enabled")
+                        send_telegram("🚀 <b>MASTER BOT V19.9 LIVE</b>\n━━━━━━━━━━━━━━\n✅ Price Sync: FIXED\n📊 Mode: Exact Candle Matching")
                         bot_notified = True
                 else:
                     time.sleep(15); continue
 
             now = datetime.now(IST)
-            if now.hour == 23 and now.minute == 59 and 0 <= now.second <= 10 and stats['last_report'] != now.date():
-                send_night_report()
+            if now.hour == 23 and now.minute >= 59 and stats['last_report'] != now.date():
+                stats['last_report'] = now.date()
+                wr = (stats['win'] / max(stats['total'], 1)) * 100
+                send_telegram(f"🌙 <b>NIGHT REPORT</b>\n━━━━━━━━━━━━━━\n📈 Total: {stats['total']}\n✅ Wins: {stats['win']}\n❌ Loss: {stats['loss']}\n🎯 WR: {wr:.1f}%")
+                stats['total'], stats['win'], stats['loss'] = 0, 0, 0
 
             if 30 <= now.second <= 32:
                 random.shuffle(verified_assets)
                 for pair in verified_assets:
                     try:
+                        # Scan with 1-min candles
                         candles = q.get_candles(pair, 60, 35, time.time())
                         if not candles or len(candles) < 30: continue
-                        df = pd.DataFrame(candles); df[['open', 'close']] = df[['open', 'close']].apply(pd.to_numeric)
+                        
+                        df = pd.DataFrame(candles)
+                        df[['open', 'close']] = df[['open', 'close']].apply(pd.to_numeric)
                         rsi = rsi_wilder(df['close'])
                         if np.isnan(rsi): continue
                         ema = df['close'].ewm(span=14, adjust=False).mean().iloc[-1]
@@ -110,29 +99,34 @@ def start_bot():
                         elif rsi < 32 and df['close'].iloc[-1] < ema: direction = "PUT"
                         
                         if direction:
-                            t_time = (now + timedelta(minutes=1)).replace(second=0).strftime('%H:%M')
+                            # 🎯 SIGNAL TIME DETERMINATION
+                            target_time = (now + timedelta(minutes=1)).replace(second=0, microsecond=0)
                             asset_label = pair.replace('_otc','-OTC').upper()
-                            msg = f"🎯 <b>VIP SIGNAL</b>\n━━━━━━━━━━━━━━\n💵 ASSET: {asset_label}\n📊 SIGNAL: {direction} {'🟢' if direction=='CALL' else '🔴'}\n⏰ TIME: {t_time} IST"
-                            send_telegram(msg, STICKER_CALL if direction == "CALL" else STICKER_PUT)
                             
+                            send_telegram(f"🎯 <b>VIP SIGNAL</b>\n━━━━━━━━━━━━━━\n💵 ASSET: {asset_label}\n📊 SIGNAL: {direction} {'🟢' if direction=='CALL' else '🔴'}\n⏰ TIME: {target_time.strftime('%H:%M')} IST", STICKER_CALL if direction == "CALL" else STICKER_PUT)
+                            
+                            # ✅ WAIT UNTIL CANDLE CLOSES + SYNC BUFFER (Total 105s from scan)
                             time.sleep(105) 
-                            check = q.get_candles(pair, 60, 3, time.time())
                             
-                            if check and len(check) >= 2:
-                                stats['total'] += 1
-                                res = check[-2]
-                                o, c = float(res['open']), float(res['close'])
-                                is_win = (direction == "CALL" and c > o) or (direction == "PUT" and c < o)
+                            # FETCH FRESH CANDLES
+                            check = q.get_candles(pair, 60, 5, time.time())
+                            if check:
+                                # ✅ MATCH EXACT TIMESTAMP
+                                target_ts = target_time.timestamp()
+                                # Signal minute ki candle dhoondho
+                                result_candle = next((c for c in reversed(check) if c['at'] == target_ts), None)
                                 
-                                result_txt = (
-                                    f"{'✅' if is_win else '❌'} <b>{asset_label} {'WIN' if is_win else 'LOSS'}</b>\n"
-                                    f"O: {o:.5f} → C: {c:.5f}"
-                                )
-                                
-                                if is_win: stats['win'] += 1
-                                else: stats['loss'] += 1
-                                
-                                send_telegram(result_txt, STICKER_ITM if is_win else STICKER_OTM)
+                                if result_candle:
+                                    stats['total'] += 1
+                                    o, c = float(result_candle['open']), float(result_candle['close'])
+                                    is_win = (direction == "CALL" and c > o) or (direction == "PUT" and c < o)
+                                    
+                                    if is_win: stats['win'] += 1
+                                    else: stats['loss'] += 1
+                                    
+                                    # Yahan ab real price dikhega
+                                    res_msg = f"{'✅' if is_win else '❌'} <b>{asset_label} {'WIN' if is_win else 'LOSS'}</b>\nO: {o:.5f} → C: {c:.5f}"
+                                    send_telegram(res_msg, STICKER_ITM if is_win else STICKER_OTM)
                             
                             time.sleep(150); break
                     except: continue
@@ -141,6 +135,5 @@ def start_bot():
 
 if __name__ == "__main__":
     Thread(target=start_bot, daemon=True).start()
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host='0.0.0.0', port=port)
-                
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
+                    
