@@ -26,12 +26,13 @@ def send_telegram(text, sticker_id=None):
     if not TELEGRAM_BOT_TOKEN or not CHATS: return
     for cid in CHATS:
         try:
-            requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-                data={"chat_id": cid, "text": text, "parse_mode": "HTML"}, timeout=10)
             if sticker_id:
-                time.sleep(0.5)
                 requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendSticker",
                     data={"chat_id": cid, "sticker": sticker_id}, timeout=10)
+                time.sleep(0.3)
+            
+            requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                data={"chat_id": cid, "text": text, "parse_mode": "HTML"}, timeout=10)
         except: pass
 
 def rsi_wilder(close, period=14):
@@ -49,7 +50,7 @@ def rsi_wilder(close, period=14):
 @app.route('/')
 def home():
     winrate = (stats['win'] / max(stats['total'], 1)) * 100
-    return f"V16.8 MAX-OTC | Trades: {stats['total']} | WR: {winrate:.1f}%"
+    return f"V17.6 27-PAIRS | Trades: {stats['total']} | WR: {winrate:.1f}%"
 
 def start_bot():
     global stats
@@ -57,18 +58,13 @@ def start_bot():
     is_logged_in = False
     bot_notified = False
 
-    # 🔥 EXTENDED OTC & REAL ASSET LIST
-    stable_assets = [
-        # REAL PAIRS
-        "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "EURJPY", "GBPJPY", "USDCAD",
-        # OTC CURRENCY PAIRS (MAX ADDED)
+    # 🔥 FULL 27 PAIRS LIST
+    verified_assets = [
+        "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "EURJPY", "GBPJPY", "USDCAD", "EURGBP",
         "EURUSD_otc", "GBPUSD_otc", "USDJPY_otc", "AUDUSD_otc", "EURJPY_otc", 
         "GBPJPY_otc", "USDINR_otc", "USDBRL_otc", "USDMXN_otc", "USDPKR_otc",
-        "USDTRY_otc", "USDEGP_otc", "USDZAR_otc", "USDMAD_otc", "USDIDR_otc",
-        "NZDUSD_otc", "USDCAD_otc", "USDCHF_otc", "EURGBP_otc", "AUDCAD_otc",
-        "AUDNZD_otc", "CHFJPY_otc", "CADJPY_otc", "EURCAD_otc", "GBPCAD_otc",
-        # METALS/CRYPTO
-        "XAUUSD_otc", "BTCUSD_otc"
+        "NZDUSD_otc", "USDCAD_otc", "USDCHF_otc", "EURGBP_otc", "AUDCAD_otc", 
+        "AUDNZD_otc", "CHFJPY_otc", "XAUUSD_otc", "BTCUSD_otc"
     ]
 
     while True:
@@ -80,7 +76,13 @@ def start_bot():
                     print("✅ LOGIN SUCCESS!", flush=True)
                     is_logged_in = True
                     if not bot_notified:
-                        send_telegram(f"🚀 <b>MASTER BOT V16.8 MAX-OTC LIVE</b>\n━━━━━━━━━━━━━━\n✅ <b>Login:</b> Success\n📊 <b>Pairs Added:</b> {len(stable_assets)}\n🛡️ <b>Status:</b> Scanning...")
+                        send_telegram(f"""🚀 <b>MASTER BOT V17.6 FULL LIVE</b>
+━━━━━━━━━━━━━━
+✅ <b>Login:</b> Success
+📊 <b>Pairs:</b> 27 (Real + OTC)
+🕐 <b>Signals:</b> 30-32 sec IST
+🔥 <b>Stickers:</b> SIGNAL+RESULT
+🛡️ <b>Status:</b> ACTIVE""")
                         bot_notified = True
                 else:
                     print(f"❌ Login failed: {reason}", flush=True)
@@ -89,9 +91,10 @@ def start_bot():
 
             now = datetime.now(IST)
             if now.second in [30, 31, 32]:
-                random.shuffle(stable_assets)
-                # Scanning top 18 pairs for better frequency
-                for pair in stable_assets[:18]:
+                print(f"🔍 Scanning 27 pairs at {now.strftime('%H:%M:%S')}", flush=True)
+                
+                random.shuffle(verified_assets)
+                for pair in verified_assets[:18]:  # Scan top 18/27 pairs
                     try:
                         candles = q.get_candles(pair, 60, 35, time.time())
                         if not candles or len(candles) < 25: continue
@@ -99,42 +102,74 @@ def start_bot():
                         df = pd.DataFrame(candles)
                         df[['open', 'close']] = df[['open', 'close']].apply(pd.to_numeric)
                         rsi = rsi_wilder(df['close'])
-                        ema = df['close'].ewm(span=14, adjust=False).mean().iloc[-1]
+                        if np.isnan(rsi): continue
                         
+                        ema = df['close'].ewm(span=14, adjust=False).mean().iloc[-1]
+                        close_price = df['close'].iloc[-1]
+                        price_bullish = close_price > ema
+                        
+                        # 🔥 BALANCED 50/50 CALL-PUT LOGIC
                         direction = None
-                        if df['close'].iloc[-1] > ema and rsi > 52: direction = "CALL"
-                        elif df['close'].iloc[-1] < ema and rsi < 48: direction = "PUT"
+                        if rsi > 65 and price_bullish:
+                            direction = "CALL"
+                        elif rsi < 35 and not price_bullish:
+                            direction = "PUT"
+                        elif 35 <= rsi <= 65:
+                            direction = "PUT" if price_bullish else "CALL"
                         
                         if direction:
                             t_time = (now + timedelta(minutes=1)).strftime('%H:%M')
                             asset_label = pair.replace("_otc", "-OTC").upper()
-                            msg = f"🎯 <b>VIP SURESHOT SIGNAL</b>\n━━━━━━━━━━━━━━\n💵 <b>ASSET:</b> {asset_label}\n📊 <b>SIGNAL:</b> {direction} {'🟢' if direction=='CALL' else '🔴'}\n⏰ <b>TIME:</b> {t_time} IST\n🚀 <b>TYPE:</b> Direct / MTG-1"
-                            send_telegram(msg, STICKER_CALL if direction=="CALL" else STICKER_PUT)
-                            stats['total'] += 1
                             
+                            msg = f"""🎯 <b>VIP SURESHOT SIGNAL</b>
+━━━━━━━━━━━━━━
+💵 <b>ASSET:</b> {asset_label}
+📊 <b>SIGNAL:</b> {direction} {'🟢' if direction=='CALL' else '🔴'}
+⏰ <b>TIME:</b> {t_time} IST
+🚀 <b>TYPE:</b> Direct / MTG-1"""
+                            
+                            sticker_id = STICKER_CALL if direction == "CALL" else STICKER_PUT
+                            send_telegram(msg, sticker_id)
+                            stats['total'] += 1
+                            print(f"🚀 SIGNAL: {asset_label} {direction} | RSI:{rsi:.1f}", flush=True)
+                            
+                            # PERFECT RESULT CHECK
                             time.sleep(95)
-                            check_candles = q.get_candles(pair, 60, 3, time.time())
-                            if check_candles:
-                                last = check_candles[-1]
-                                o, c = float(last['open']), float(last['close'])
-                                res = "WIN" if (direction=="CALL" and c>o) or (direction=="PUT" and c<o) else "LOSS"
-                                if res == "WIN":
+                            check_candles = q.get_candles(pair, 60, 5, time.time())
+                            if check_candles and len(check_candles) >= 2:
+                                result_candle = check_candles[-2]
+                                o = float(result_candle['open'])
+                                c = float(result_candle['close'])
+                                
+                                is_win = (direction == "CALL" and c > o) or (direction == "PUT" and c < o)
+                                
+                                if is_win:
                                     stats['win'] += 1
-                                    send_telegram(f"✅ <b>{asset_label} WIN!!</b>", STICKER_ITM)
+                                    send_telegram(f"✅ <b>{asset_label} WIN!!</b>
+💰 O:{o:.5f} → C:{c:.5f}", STICKER_ITM)
                                 else:
                                     stats['loss'] += 1
-                                    send_telegram(f"❌ <b>{asset_label} LOSS</b>", STICKER_OTM)
+                                    send_telegram(f"❌ <b>{asset_label} LOSS</b>
+📉 O:{o:.5f} → C:{c:.5f}", STICKER_OTM)
+                            
                             time.sleep(150)
                             break
-                    except: continue
-            time.sleep(1)
+                    
+                    except Exception as e:
+                        print(f"Pair {pair} error: {str(e)[:50]}")
+                        continue
+                
+                time.sleep(10)
+            
+            time.sleep(0.8)
 
         except Exception as e:
-            print(f"🚨 Bot Error: {e}", flush=True)
+            print(f"🚨 Bot Error: {e}")
             is_logged_in = False
             time.sleep(10)
 
 if __name__ == "__main__":
-    Thread(target=lambda: app.run(host='0.0.0.0', port=10000), daemon=True).start()
+    print("🚀 V17.6 - 27 FULL PAIRS + STICKERS FIXED")
+    print("📱 18 pairs scanned per minute from 27 total")
+    Thread(target=lambda: app.run(host='0.0.0.0', port=10000, debug=False), daemon=True).start()
     start_bot()
-                        
