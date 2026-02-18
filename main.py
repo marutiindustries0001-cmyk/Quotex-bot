@@ -1,230 +1,254 @@
-import os, asyncio, logging, json, random, pytz, time
-import pandas as pd
+import os, time, pytz, requests, pandas as pd
 from datetime import datetime
-from aiohttp import ClientSession
+from threading import Thread, Lock
 from flask import Flask
-from threading import Thread
 from quotexapi.stable_api import Quotex
-from concurrent.futures import ThreadPoolExecutor
 
-# ---------------- LOGGING ----------------
-logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
-logger = logging.getLogger("ProductionBeast")
+# ================= ENV & CONFIG =================
+EMAIL = os.getenv("QUOTEX_EMAIL")
+PASSWORD = os.getenv("QUOTEX_PASSWORD")
+BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
+CHAT_IDS = [cid.strip() for cid in os.getenv("TELEGRAM_CHAT_IDS", "").split(",") if cid.strip()]
 
-IST = pytz.timezone('Asia/Kolkata')
+STICKER_CALL = os.getenv("STICKER_CALL")
+STICKER_PUT = os.getenv("STICKER_PUT")
+STICKER_WIN = os.getenv("STICKER_WIN")
+STICKER_LOSS = os.getenv("STICKER_LOSS")
+
+IST = pytz.timezone("Asia/Kolkata")
 app = Flask(__name__)
-VERSION = "V25.6-FINAL"
 
-# ---------------- ENV VALIDATION ----------------
-QUOTEX_EMAIL = os.getenv("QUOTEX_EMAIL")
-QUOTEX_PASSWORD = os.getenv("QUOTEX_PASSWORD")
-TG_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-
-if not QUOTEX_EMAIL or not QUOTEX_PASSWORD:
-    raise ValueError("❌ QUOTEX_EMAIL or QUOTEX_PASSWORD missing in environment variables")
-
-CHATS = [id for id in [os.getenv("TELEGRAM_CHAT_ID1"), os.getenv("TELEGRAM_CHAT_ID2")] if id]
-
-S_CALL = os.getenv("STICKER_CALL")
-S_PUT = os.getenv("STICKER_PUT")
-S_ITM = os.getenv("STICKER_ITM")
-S_OTM = os.getenv("STICKER_OTM")
-
-stats = {"total": 0, "direct_win": 0, "mtg_win": 0, "loss": 0, "refund": 0, "last_report": None}
-stats_lock = asyncio.Lock()
-executor = ThreadPoolExecutor(max_workers=10)
-
-@app.route('/')
+@app.route("/")
 def health():
-    return json.dumps({"status": "active", "version": VERSION}), 200
+    return "ENGINE_V12_3_INSTITUTIONAL_RUNNING", 200
 
-# ---------------- SAFE API WITH RETRY ----------------
-async def safe_api(loop, func, *args, retries=3):
-    for attempt in range(retries):
-        try:
-            result = await loop.run_in_executor(executor, func, *args)
-            if result:
-                return result
-        except Exception as e:
-            logger.warning(f"API error: {e}")
-        await asyncio.sleep(2)
-    return None
+# ================= THREAD LOCK =================
+trade_lock = Lock()
 
-# ---------------- DATA DECODER ----------------
-def decode_quotex_data(raw):
-    try:
-        if not raw or not isinstance(raw, list):
-            return None
-
-        key_map = {'o': 'open', 'c': 'close', 'h': 'high', 'l': 'low', 'at': 'at'}
-        normalized = []
-
-        for c in raw:
-            clean = {key_map.get(k.lower(), k.lower()): v
-                     for k, v in c.items()
-                     if k.lower() in key_map or k.lower() in key_map.values()}
-
-            if all(k in clean for k in ['open', 'close', 'high', 'low', 'at']):
-                normalized.append(clean)
-
-        if len(normalized) < 20:
-            return None
-
-        df = pd.DataFrame(normalized)
-        df[['open', 'close', 'high', 'low']] = df[['open', 'close', 'high', 'low']].apply(pd.to_numeric)
-        return df
-    except Exception as e:
-        logger.error(f"Decode error: {e}")
-        return None
-
-# ---------------- TELEGRAM SAFE ----------------
-async def send_tg(session, text=None, sticker=None):
-    if not TG_TOKEN:
+# ================= TELEGRAM =================
+def send_telegram(text=None, sticker=None):
+    if not BOT_TOKEN:
         return
-    for cid in CHATS:
+    for chat_id in CHAT_IDS:
         try:
             if text:
-                await session.post(
-                    f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-                    data={"chat_id": cid, "text": text, "parse_mode": "HTML"}
+                requests.post(
+                    f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                    json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
+                    timeout=10
                 )
             if sticker:
-                await session.post(
-                    f"https://api.telegram.org/bot{TG_TOKEN}/sendSticker",
-                    data={"chat_id": cid, "sticker": sticker}
+                requests.post(
+                    f"https://api.telegram.org/bot{BOT_TOKEN}/sendSticker",
+                    json={"chat_id": chat_id, "sticker": sticker},
+                    timeout=10
                 )
-        except Exception as e:
-            logger.warning(f"Telegram error: {e}")
+        except:
+            pass
 
-# ---------------- ENGINE ----------------
-async def start_engine():
-    global stats
-    loop = asyncio.get_running_loop()
-    async with ClientSession() as session:
+# ================= ASSETS =================
+verified_assets = [
+    "EURUSD_otc","GBPUSD_otc","USDJPY_otc","AUDUSD_otc",
+    "EURJPY_otc","GBPJPY_otc","EURGBP_otc","USDCHF_otc",
+    "USDINR_otc","USDBRL_otc","USDTRY_otc",
+    "USDBDT_otc","USDPKR_otc","USDMXN_otc"
+]
 
-        q = Quotex(email=QUOTEX_EMAIL, password=QUOTEX_PASSWORD)
+# ================= CONNECTION =================
+client = None
+def connect():
+    global client
+    while True:
+        try:
+            client = Quotex(email=EMAIL, password=PASSWORD)
+            ok, _ = client.connect()
+            if ok:
+                print("✅ Quotex Connected")
+                return
+        except:
+            pass
+        print("Reconnecting...")
+        time.sleep(5)
 
-        # AUTO CONNECT
-        async def ensure_connection():
-            while True:
-                status, _ = await safe_api(loop, q.connect)
-                if status:
-                    logger.info("✅ QUOTEX CONNECTED")
-                    break
-                logger.error("❌ Connect failed. Retrying in 10s...")
-                await asyncio.sleep(10)
+connect()
 
-        await ensure_connection()
-        await send_tg(session, f"🚀 <b>{VERSION} LIVE</b>\n🛡️ Production Mode Active")
+# ================= GLOBAL STATS =================
+trade_active = False
+stats = {"win": 0, "loss": 0, "total": 0}
+last_summary_date = None
 
-        assets = [
-            "EURUSD_otc","GBPUSD_otc","USDJPY_otc","AUDUSD_otc","EURJPY_otc",
-            "GBPJPY_otc","USDCAD_otc","USDCHF_otc","NZDUSD_otc","EURGBP_otc",
-            "AUDJPY_otc","USDINR_otc","USDBRL_otc","USDTRY_otc","USDMXN_otc",
-            "BTCUSD_otc","XAUUSD_otc","XAGUSD_otc"
-        ]
+# ================= DATA ENGINE =================
+def get_candles(asset):
+    try:
+        candles = client.get_candles(asset, 60, 100)
+        if not candles:
+            return None
+        df = pd.DataFrame(candles)
+        if len(df) < 30:
+            return None
 
-        while True:
-            try:
-                now = datetime.now(IST)
+        df["close"] = pd.to_numeric(df["close"])
+        df["open"] = pd.to_numeric(df["open"])
 
-                # DAILY REPORT
-                if now.hour == 23 and now.minute >= 59 and stats['last_report'] != now.date():
-                    async with stats_lock:
-                        stats['last_report'] = now.date()
-                        tw = stats['direct_win'] + stats['mtg_win']
-                        wr = (tw / max(stats['total'] - stats['refund'], 1)) * 100
-                        await send_tg(session,
-                            f"🌙 <b>DAILY REPORT</b>\nDirect: {stats['direct_win']}\nMTG-1: {stats['mtg_win']}\nLoss: {stats['loss']}\nWR: {wr:.1f}%")
-                        stats.update({"total":0,"direct_win":0,"mtg_win":0,"loss":0,"refund":0})
+        df["ema7"] = df["close"].ewm(span=7, adjust=False).mean()
+        df["ema21"] = df["close"].ewm(span=21, adjust=False).mean()
 
-                # SIGNAL WINDOW
-                if 30 <= now.second <= 35:
-                    random.shuffle(assets)
+        delta = df["close"].diff()
+        gain = delta.clip(lower=0).rolling(14).mean()
+        loss = (-delta.clip(upper=0)).rolling(14).mean()
+        df["rsi"] = 100 - (100 / (1 + (gain / (loss + 1e-10))))
+        return df
 
-                    for pair in assets:
-                        raw = await safe_api(loop, q.get_candles, pair, 60, 60, time.time())
-                        df = decode_quotex_data(raw)
-                        if df is None:
-                            continue
+    except:
+        connect()
+        return None
 
-                        delta = df['close'].diff()
-                        gain = delta.where(delta > 0, 0).ewm(alpha=1/14, adjust=False).mean()
-                        loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False).mean()
-                        df['rsi'] = 100 - (100 / (1 + (gain / loss.replace(0, 1e-10))))
-                        df['ema7'] = df['close'].ewm(span=7).mean()
-                        df['ema21'] = df['close'].ewm(span=21).mean()
+# ================= RESULT ENGINE =================
+def wait_result(pair, entry_time):
+    while int(time.time()) < entry_time + 62:
+        time.sleep(1)
 
-                        last, prev = df.iloc[-1], df.iloc[-2]
-                        direction = None
+    df1 = get_candles(pair)
+    time.sleep(1)
+    df2 = get_candles(pair)
 
-                        if last['rsi'] > 60 and last['ema7'] > last['ema21'] and prev['close'] > prev['open']:
-                            direction = "CALL"
-                        elif last['rsi'] < 40 and last['ema7'] < last['ema21'] and prev['close'] < prev['open']:
-                            direction = "PUT"
+    if df1 is None or df2 is None:
+        return None
 
-                        if direction:
-                            target_ts = int(last['at']) + 60
-                            mtg_ts = target_ts + 60
-                            label = pair.replace('_otc','-OTC').replace('XAUUSD','GOLD').replace('XAGUSD','SILVER').upper()
+    c1 = df1[df1["time"] == entry_time]
+    c2 = df2[df2["time"] == entry_time]
 
-                            await send_tg(session,
-                                f"🎯 <b>SIGNAL</b>\n💵 {label}\n📊 {direction}\n⏰ {datetime.fromtimestamp(target_ts, IST).strftime('%H:%M')} IST",
-                                S_CALL if direction=="CALL" else S_PUT)
+    if not c1.empty and not c2.empty:
+        if float(c1.iloc[0]["close"]) == float(c2.iloc[0]["close"]):
+            return c1.iloc[0]
+    return None
 
-                            await asyncio.sleep(115)
+# ================= TRADE PROCESS =================
+def process_trade(pair, direction, entry_time):
+    global trade_active, stats
 
-                            v_raw = await safe_api(loop, q.get_candles, pair, 60, 10, time.time())
-                            v_df = decode_quotex_data(v_raw)
+    asset_name = pair.replace("_otc", "-OTC").upper()
 
-                            res = None
-                            if v_df is not None:
-                                res = next((c for _,c in v_df.iloc[::-1].iterrows()
-                                           if abs(int(c['at']) - target_ts) < 8), None)
+    send_telegram(
+        text=f"🎯 <b>VIP SIGNAL: {asset_name}</b>\n"
+             f"📊 <b>DIR:</b> {'🟢 CALL' if direction=='CALL' else '🔴 PUT'}\n"
+             f"⏰ <b>ENTRY:</b> {datetime.fromtimestamp(entry_time, IST).strftime('%H:%M')}\n"
+             f"🚀 <b>TYPE:</b> Direct / MTG-1",
+        sticker=STICKER_CALL if direction=="CALL" else STICKER_PUT
+    )
 
-                            if res:
-                                async with stats_lock:
-                                    stats['total'] += 1
-                                    o, c = float(res['open']), float(res['close'])
+    stats["total"] += 1
 
-                                    if abs(c-o) < 1e-7:
-                                        stats['refund'] += 1
-                                        await send_tg(session, f"⚖️ {label} REFUND")
-                                    elif (direction=="CALL" and c>o) or (direction=="PUT" and c<o):
-                                        stats['direct_win'] += 1
-                                        await send_tg(session, f"✅ {label} DIRECT WIN", S_ITM)
-                                    else:
-                                        await send_tg(session, f"🔄 {label} MTG-1 STARTING...")
-                                        await asyncio.sleep(60)
+    # DIRECT
+    candle = wait_result(pair, entry_time)
+    if candle is not None:
+        win = (candle["close"] > candle["open"]) if direction=="CALL" else (candle["close"] < candle["open"])
+        if win:
+            stats["win"] += 1
+            send_telegram(text=f"✅ <b>{asset_name} DIRECT WIN!</b>", sticker=STICKER_WIN)
+            with trade_lock:
+                trade_active = False
+            return
+        else:
+            send_telegram(text=f"❌ <b>{asset_name} DIRECT LOSS</b>")
 
-                                        m_raw = await safe_api(loop, q.get_candles, pair, 60, 10, time.time())
-                                        m_df = decode_quotex_data(m_raw)
-                                        m_res = None
-                                        if m_df is not None:
-                                            m_res = next((c for _,c in m_df.iloc[::-1].iterrows()
-                                                         if abs(int(c['at']) - mtg_ts) < 8), None)
+    # MTG-1
+    send_telegram(text="🔁 <b>MTG-1 STARTED</b>")
+    mtg_candle = wait_result(pair, entry_time + 60)
 
-                                        if m_res:
-                                            mo, mc = float(m_res['open']), float(m_res['close'])
-                                            if (direction=="CALL" and mc>mo) or (direction=="PUT" and mc<mo):
-                                                stats['mtg_win'] += 1
-                                                await send_tg(session, f"✅ {label} MTG-1 WIN", S_ITM)
-                                            else:
-                                                stats['loss'] += 1
-                                                await send_tg(session, f"❌ {label} LOSS", S_OTM)
+    if mtg_candle is not None:
+        win_mtg = (mtg_candle["close"] > mtg_candle["open"]) if direction=="CALL" else (mtg_candle["close"] < mtg_candle["open"])
+        if win_mtg:
+            stats["win"] += 1
+            send_telegram(text=f"✅ <b>{asset_name} MTG WIN!</b>", sticker=STICKER_WIN)
+        else:
+            stats["loss"] += 1
+            send_telegram(text=f"❌ <b>{asset_name} LOSS</b>", sticker=STICKER_LOSS)
+    else:
+        stats["loss"] += 1
+        send_telegram(text=f"❌ <b>{asset_name} VERIFICATION FAIL (LOSS)</b>", sticker=STICKER_LOSS)
 
-                            await asyncio.sleep(2)
+    with trade_lock:
+        trade_active = False
+
+# ================= AUTO SUMMARY =================
+def summary_loop():
+    global stats, last_summary_date
+    while True:
+        now = datetime.now(IST)
+
+        if now.strftime("%H:%M") == "23:59":
+            if last_summary_date != now.date():
+                last_summary_date = now.date()
+
+                total = stats["total"]
+                win = stats["win"]
+                loss = stats["loss"]
+                winrate = (win / total * 100) if total > 0 else 0
+
+                report = (
+                    f"📊 <b>DAILY ACCURACY SUMMARY</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━\n"
+                    f"📅 Date: {now.strftime('%d-%m-%Y')}\n"
+                    f"✅ Total Trades: {total}\n"
+                    f"💰 Wins: {win}\n"
+                    f"❌ Losses: {loss}\n"
+                    f"📈 Winrate: {winrate:.2f}%\n"
+                    f"━━━━━━━━━━━━━━━━━━"
+                )
+
+                send_telegram(text=report)
+                stats = {"win": 0, "loss": 0, "total": 0}
+
+        time.sleep(20)
+
+# ================= SIGNAL LOOP =================
+def signal_loop():
+    global trade_active
+    last_min = None
+    print("🚀 ENGINE V12.3 INSTITUTIONAL STARTED")
+
+    while True:
+        now = datetime.now(IST)
+
+        if now.second == 40:
+            with trade_lock:
+                if trade_active:
+                    time.sleep(1)
+                    continue
+
+                if last_min == now.minute:
+                    time.sleep(1)
+                    continue
+
+                last_min = now.minute
+
+                for pair in verified_assets:
+                    df = get_candles(pair)
+                    if df is None:
+                        continue
+
+                    last = df.iloc[-1]
+                    server_minute = (int(time.time()) // 60) * 60
+
+                    if abs(int(last["time"]) - server_minute) <= 2:
+
+                        entry_time = int(last["time"]) + 60
+
+                        if last["rsi"] > 60 and last["ema7"] > last["ema21"]:
+                            trade_active = True
+                            Thread(target=process_trade, args=(pair,"CALL",entry_time)).start()
                             break
 
-                await asyncio.sleep(1)
+                        elif last["rsi"] < 40 and last["ema7"] < last["ema21"]:
+                            trade_active = True
+                            Thread(target=process_trade, args=(pair,"PUT",entry_time)).start()
+                            break
 
-            except Exception as e:
-                logger.error(f"Loop error: {e}")
-                await asyncio.sleep(5)
+        time.sleep(1)
 
-def run_flask():
-    app.run(host='0.0.0.0', port=int(os.environ.get("PORT",10000)))
-
+# ================= START =================
 if __name__ == "__main__":
-    Thread(target=run_flask, daemon=True).start()
-    asyncio.run(start_engine())
+    Thread(target=signal_loop, daemon=True).start()
+    Thread(target=summary_loop, daemon=True).start()
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
