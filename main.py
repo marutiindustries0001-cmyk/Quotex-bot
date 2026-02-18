@@ -20,7 +20,7 @@ app = Flask(__name__)
 
 @app.route("/")
 def health():
-    return "ENGINE_V12_3_INSTITUTIONAL_RUNNING", 200
+    return "ENGINE_V12_4_REAL_SYNC_RUNNING", 200
 
 # ================= THREAD LOCK =================
 trade_lock = Lock()
@@ -60,15 +60,15 @@ def connect():
     global client
     while True:
         try:
+            print(f"DEBUG: Attempting login for {EMAIL}")
             client = Quotex(email=EMAIL, password=PASSWORD)
             ok, _ = client.connect()
             if ok:
-                print("✅ Quotex Connected")
+                print("✅ Quotex Connected Successfully")
                 return
-        except:
-            pass
-        print("Reconnecting...")
-        time.sleep(5)
+        except Exception as e:
+            print("Connect error:", e)
+        time.sleep(10)
 
 connect()
 
@@ -83,6 +83,7 @@ def get_candles(asset):
         candles = client.get_candles(asset, 60, 100)
         if not candles:
             return None
+
         df = pd.DataFrame(candles)
         if len(df) < 30:
             return None
@@ -97,10 +98,10 @@ def get_candles(asset):
         gain = delta.clip(lower=0).rolling(14).mean()
         loss = (-delta.clip(upper=0)).rolling(14).mean()
         df["rsi"] = 100 - (100 / (1 + (gain / (loss + 1e-10))))
-        return df
 
-    except:
-        connect()
+        return df
+    except Exception as e:
+        print("Candle fetch error:", e)
         return None
 
 # ================= RESULT ENGINE =================
@@ -126,8 +127,9 @@ def wait_result(pair, entry_time):
 # ================= TRADE PROCESS =================
 def process_trade(pair, direction, entry_time):
     global trade_active, stats
-
     asset_name = pair.replace("_otc", "-OTC").upper()
+
+    print(f"🚀 SIGNAL FOUND: {asset_name}")
 
     send_telegram(
         text=f"🎯 <b>VIP SIGNAL: {asset_name}</b>\n"
@@ -139,7 +141,7 @@ def process_trade(pair, direction, entry_time):
 
     stats["total"] += 1
 
-    # DIRECT
+    # DIRECT RESULT
     candle = wait_result(pair, entry_time)
     if candle is not None:
         win = (candle["close"] > candle["open"]) if direction=="CALL" else (candle["close"] < candle["open"])
@@ -171,12 +173,11 @@ def process_trade(pair, direction, entry_time):
     with trade_lock:
         trade_active = False
 
-# ================= AUTO SUMMARY =================
+# ================= DAILY SUMMARY =================
 def summary_loop():
     global stats, last_summary_date
     while True:
         now = datetime.now(IST)
-
         if now.strftime("%H:%M") == "23:59":
             if last_summary_date != now.date():
                 last_summary_date = now.date()
@@ -206,22 +207,19 @@ def summary_loop():
 def signal_loop():
     global trade_active
     last_min = None
-    print("🚀 ENGINE V12.3 INSTITUTIONAL STARTED")
+
+    print("🚀 ENGINE V12.4 REAL SYNC STARTED")
 
     while True:
         now = datetime.now(IST)
 
         if now.second == 40:
             with trade_lock:
-                if trade_active:
-                    time.sleep(1)
-                    continue
-
-                if last_min == now.minute:
-                    time.sleep(1)
+                if trade_active or last_min == now.minute:
                     continue
 
                 last_min = now.minute
+                print(f"⏰ Scan @ {now.strftime('%H:%M:%S')}")
 
                 for pair in verified_assets:
                     df = get_candles(pair)
@@ -229,21 +227,27 @@ def signal_loop():
                         continue
 
                     last = df.iloc[-1]
+
+                    # 🔥 SERVER TIME SYNC PROTECTION
                     server_minute = (int(time.time()) // 60) * 60
+                    if abs(int(last["time"]) - server_minute) > 2:
+                        print(f"  > {pair}: Skipped (Time Misaligned)")
+                        continue
 
-                    if abs(int(last["time"]) - server_minute) <= 2:
+                    rsi_val = round(last["rsi"], 2)
+                    print(f"  > {pair}: RSI={rsi_val}")
 
-                        entry_time = int(last["time"]) + 60
+                    entry_time = int(last["time"]) + 60
 
-                        if last["rsi"] > 60 and last["ema7"] > last["ema21"]:
-                            trade_active = True
-                            Thread(target=process_trade, args=(pair,"CALL",entry_time)).start()
-                            break
+                    if rsi_val > 60 and last["ema7"] > last["ema21"]:
+                        trade_active = True
+                        Thread(target=process_trade, args=(pair,"CALL",entry_time)).start()
+                        break
 
-                        elif last["rsi"] < 40 and last["ema7"] < last["ema21"]:
-                            trade_active = True
-                            Thread(target=process_trade, args=(pair,"PUT",entry_time)).start()
-                            break
+                    elif rsi_val < 40 and last["ema7"] < last["ema21"]:
+                        trade_active = True
+                        Thread(target=process_trade, args=(pair,"PUT",entry_time)).start()
+                        break
 
         time.sleep(1)
 
