@@ -1,9 +1,8 @@
-import os, time, requests, pandas as pd
+import os, time, pytz, requests, pandas as pd
 from datetime import datetime
 from threading import Thread, Lock
 from flask import Flask
 from quotexapi.stable_api import Quotex
-import pytz
 
 # ================= ENV & CONFIG =================
 EMAIL = os.getenv("QUOTEX_EMAIL")
@@ -20,81 +19,122 @@ IST = pytz.timezone("Asia/Kolkata")
 app = Flask(__name__)
 
 @app.route("/")
-def health(): return "ENGINE_V12_4_FINAL_RUNNING", 200
+def health(): return "BOT ENGINE V12.5 RUNNING", 200
 
 # ================= THREAD LOCK =================
 trade_lock = Lock()
 
-# ================= ASSETS =================
-real_assets = [
-    "EURUSD","GBPUSD","USDJPY","AUDUSD",
-    "EURJPY","GBPJPY","EURGBP","USDCHF"
-]
+# ================= TELEGRAM =================
+def send_telegram(text=None, sticker=None):
+    if not BOT_TOKEN:
+        print("⚠️ TELEGRAM BOT_TOKEN NOT SET")
+        return
+    if not CHAT_IDS:
+        print("⚠️ TELEGRAM CHAT_IDS NOT SET")
+        return
 
-otc_assets = [
+    for chat_id in CHAT_IDS:
+        try:
+            if text:
+                r = requests.post(
+                    f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                    json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
+                    timeout=10
+                )
+                if r.status_code != 200:
+                    print("Telegram send failed:", r.text)
+            if sticker:
+                r2 = requests.post(
+                    f"https://api.telegram.org/bot{BOT_TOKEN}/sendSticker",
+                    json={"chat_id": chat_id, "sticker": sticker},
+                    timeout=10
+                )
+                if r2.status_code != 200:
+                    print("Telegram sticker send failed:", r2.text)
+        except Exception as e:
+            print("Telegram exception:", e)
+
+# ================= FIXED ASSETS =================
+verified_assets = [
     "EURUSD_otc","GBPUSD_otc","USDJPY_otc","AUDUSD_otc",
     "EURJPY_otc","GBPJPY_otc","EURGBP_otc","USDCHF_otc",
     "USDINR_otc","USDBRL_otc","USDTRY_otc",
     "USDBDT_otc","USDPKR_otc","USDMXN_otc"
 ]
 
-# ================= CONNECTION =================
+# ================= QUOTEX CONNECT =================
 client = None
 def connect():
     global client
     while True:
         try:
-            print(f"DEBUG: Attempting login for {EMAIL}")
+            print(f"DEBUG: Logging in as {EMAIL}")
             client = Quotex(email=EMAIL, password=PASSWORD)
             ok, _ = client.connect()
             if ok:
                 print("✅ Quotex Connected Successfully")
+                send_telegram("🚀 <b>BOT CONNECTED TO QUOTEX</b>")
                 return
-        except:
-            pass
-        print("⚠ Reconnecting...")
+        except Exception as e:
+            print("Connect error:", e)
         time.sleep(10)
 
 connect()
 
 # ================= GLOBAL STATS =================
 trade_active = False
-stats = {"win": 0, "loss": 0, "total": 0}
+stats = {"win":0,"loss":0,"total":0}
 last_summary_date = None
 
-# ================= DATA ENGINE =================
+# ================= CANDLE FETCH =================
 def get_candles(asset):
+    """
+    Fetch candles with correct signature:
+    get_candles(asset, period, count, end_time)
+    """
     try:
-        now_ts = int(time.time())
-        candles = client.get_candles(asset, 60, now_ts)
-        if not candles or len(candles)<30: return None
+        end_time = int(time.time())
+        # 60 = 1 minute timeframe, 100 candles
+        candles = client.get_candles(asset, 60, 100, end_time)
+        if not candles:
+            return None
         df = pd.DataFrame(candles)
+        if len(df) < 30:
+            return None
+
         df["close"] = pd.to_numeric(df["close"])
         df["open"] = pd.to_numeric(df["open"])
         df["ema7"] = df["close"].ewm(span=7, adjust=False).mean()
         df["ema21"] = df["close"].ewm(span=21, adjust=False).mean()
+
+        # RSI
         delta = df["close"].diff()
         gain = delta.clip(lower=0).rolling(14).mean()
         loss = (-delta.clip(upper=0)).rolling(14).mean()
-        df["rsi"] = 100 - (100 / (1 + (gain / (loss + 1e-10))))
+        df["rsi"] = 100 - (100 / (1 + (gain/(loss+1e-10))))
         return df
+
     except Exception as e:
-        print(f"Candle fetch error: {e}")
+        print("⚠️ Candle fetch error:", e)
         return None
 
 # ================= RESULT ENGINE =================
 def wait_result(pair, entry_time):
+    """
+    Wait until candle closes,
+    then check with double fetch verification
+    """
     while int(time.time()) < entry_time + 62:
         time.sleep(1)
 
     df1 = get_candles(pair)
     time.sleep(1)
     df2 = get_candles(pair)
-    if df1 is None or df2 is None: return None
+    if df1 is None or df2 is None:
+        return None
 
     c1 = df1[df1["time"] == entry_time]
     c2 = df2[df2["time"] == entry_time]
-
     if not c1.empty and not c2.empty:
         if float(c1.iloc[0]["close"]) == float(c2.iloc[0]["close"]):
             return c1.iloc[0]
@@ -103,69 +143,58 @@ def wait_result(pair, entry_time):
 # ================= TRADE PROCESS =================
 def process_trade(pair, direction, entry_time):
     global trade_active, stats
-    asset_name = pair.replace("_otc", "-OTC").upper() if "_otc" in pair else pair
-    print(f"🚀 SIGNAL FOUND: {asset_name}")
+
+    asset_label = pair.replace("_otc","-OTC").upper()
+    print("🚀 Trade executing for:", asset_label)
 
     send_telegram(
-        text=f"🎯 <b>VIP SIGNAL: {asset_name}</b>\n"
-             f"📊 <b>DIR:</b> {'🟢 CALL' if direction=='CALL' else '🔴 PUT'}\n"
-             f"⏰ <b>ENTRY:</b> {datetime.fromtimestamp(entry_time, IST).strftime('%H:%M')}\n"
-             f"🚀 <b>TYPE:</b> Direct / MTG-1",
+        text=f"🎯 <b>SIGNAL</b>\nAsset: {asset_label}\nDirection: {direction}\nTime: {datetime.fromtimestamp(entry_time, IST).strftime('%H:%M')}",
         sticker=STICKER_CALL if direction=="CALL" else STICKER_PUT
     )
 
     stats["total"] += 1
 
+    # DIRECT RESULT
     candle = wait_result(pair, entry_time)
     if candle:
-        win = (candle["close"] > candle["open"]) if direction=="CALL" else (candle["close"] < candle["open"])
+        close, open_ = candle["close"], candle["open"]
+        win = (close>open_) if direction=="CALL" else (close<open_)
         if win:
             stats["win"] += 1
-            send_telegram(text=f"✅ <b>{asset_name} DIRECT WIN!</b>", sticker=STICKER_WIN)
+            send_telegram(text=f"✅ <b>{asset_label} DIRECT WIN!</b>", sticker=STICKER_WIN)
             with trade_lock: trade_active = False
             return
         else:
-            send_telegram(text=f"❌ <b>{asset_name} DIRECT LOSS</b>")
+            send_telegram(text=f"❌ <b>{asset_label} DIRECT LOSS</b>")
 
-    send_telegram(text="🔁 <b>MTG-1 STARTED</b>")
-    mtg_candle = wait_result(pair, entry_time + 60)
+    # MTG‑1
+    send_telegram(text="🔁 <b>MTG‑1 STARTED</b>")
+    mtg_candle = wait_result(pair, entry_time+60)
     if mtg_candle:
-        win_mtg = (mtg_candle["close"] > mtg_candle["open"]) if direction=="CALL" else (mtg_candle["close"] < mtg_candle["open"])
+        mc, mo = mtg_candle["close"], mtg_candle["open"]
+        win_mtg = (mc>mo) if direction=="CALL" else (mc<mo)
         if win_mtg:
             stats["win"] += 1
-            send_telegram(text=f"✅ <b>{asset_name} MTG WIN!</b>", sticker=STICKER_WIN)
+            send_telegram(text=f"✅ <b>{asset_label} MTG WIN!</b>", sticker=STICKER_WIN)
         else:
             stats["loss"] += 1
-            send_telegram(text=f"❌ <b>{asset_name} LOSS</b>", sticker=STICKER_LOSS)
+            send_telegram(text=f"❌ <b>{asset_label} LOSS</b>", sticker=STICKER_LOSS)
     else:
         stats["loss"] += 1
-        send_telegram(text=f"❌ <b>{asset_name} VERIFICATION FAIL (LOSS)</b>", sticker=STICKER_LOSS)
+        send_telegram(text=f"❌ <b>{asset_label} VERIFICATION FAIL (LOSS)</b>", sticker=STICKER_LOSS)
 
     with trade_lock: trade_active = False
 
-# ================= TELEGRAM =================
-def send_telegram(text=None, sticker=None):
-    if not BOT_TOKEN: return
-    for chat_id in CHAT_IDS:
-        try:
-            if text:
-                requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-                              json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"}, timeout=10)
-            if sticker:
-                requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendSticker",
-                              json={"chat_id": chat_id, "sticker": sticker}, timeout=10)
-        except: pass
-
-# ================= AUTO SUMMARY =================
+# ================= AUTO DAILY SUMMARY =================
 def summary_loop():
     global stats, last_summary_date
     while True:
         now = datetime.now(IST)
-        if now.strftime("%H:%M") == "23:59" and last_summary_date != now.date():
+        if now.strftime("%H:%M")=="23:59" and last_summary_date!=now.date():
             last_summary_date = now.date()
-            total, win, loss = stats["total"], stats["win"], stats["loss"]
-            winrate = (win/total*100) if total>0 else 0
-            report = f"📊 <b>DAILY SUMMARY</b>\n✅ Total: {total} | 💰 Wins: {win}\n❌ Losses: {loss} | 📈 Rate: {winrate:.2f}%"
+            total,win,loss = stats["total"],stats["win"],stats["loss"]
+            wr = (win/total*100) if total>0 else 0
+            report = f"📊 <b>DAILY SUMMARY</b>\nTotal:{total} | Wins:{win} | Loss:{loss} | WR:{wr:.2f}%"
             send_telegram(text=report)
             stats = {"win":0,"loss":0,"total":0}
         time.sleep(30)
@@ -173,46 +202,48 @@ def summary_loop():
 # ================= SIGNAL LOOP =================
 def signal_loop():
     global trade_active
-    last_min = None
-    print("🚀 ENGINE V12.4 INSTITUTIONAL FINAL STARTED")
+    last_min=None
+    print("🚀 ENGINE V12.5 STARTED")
 
     while True:
         now = datetime.now(IST)
-        weekday = now.weekday()  # Mon=0 ... Sun=6
-        if now.second == 40:
+
+        # Skip Sat & Sun scanning
+        if now.weekday()>=5:
+            time.sleep(60)
+            continue
+
+        if now.second==40:
             with trade_lock:
-                if trade_active or last_min == now.minute:
+                if trade_active or last_min==now.minute:
                     time.sleep(1)
                     continue
                 last_min = now.minute
                 print(f"⏰ Scan @ {now.strftime('%H:%M:%S')}")
 
-                # Decide pairs: Real pairs only Mon-Fri
-                if weekday < 5:
-                    scan_assets = real_assets + otc_assets
-                else:
-                    scan_assets = otc_assets
-
-                for pair in scan_assets:
+                for pair in verified_assets:
                     df = get_candles(pair)
-                    if df is None: continue
+                    if df is None:
+                        continue
+
                     last = df.iloc[-1]
                     rsi_val = round(last["rsi"],2)
-                    print(f"  > {pair}: RSI={rsi_val}")
+                    print(f"  > {pair} RSI {rsi_val}")
+
                     entry_time = int(last["time"]) + 60
 
-                    if rsi_val > 60 and last["ema7"] > last["ema21"]:
-                        trade_active = True
-                        Thread(target=process_trade, args=(pair,"CALL",entry_time)).start()
+                    if rsi_val>60 and last["ema7"]>last["ema21"]:
+                        trade_active=True
+                        Thread(target=process_trade,args=(pair,"CALL",entry_time)).start()
                         break
-                    elif rsi_val < 40 and last["ema7"] < last["ema21"]:
-                        trade_active = True
-                        Thread(target=process_trade, args=(pair,"PUT",entry_time)).start()
+                    elif rsi_val<40 and last["ema7"]<last["ema21"]:
+                        trade_active=True
+                        Thread(target=process_trade,args=(pair,"PUT",entry_time)).start()
                         break
         time.sleep(1)
 
-# ================= START =================
-if __name__ == "__main__":
-    Thread(target=signal_loop, daemon=True).start()
-    Thread(target=summary_loop, daemon=True).start()
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT",10000)))
+# ================= START BOT =================
+if __name__=="__main__":
+    Thread(target=signal_loop,daemon=True).start()
+    Thread(target=summary_loop,daemon=True).start()
+    app.run(host="0.0.0.0",port=int(os.getenv("PORT",10000)))
