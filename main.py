@@ -8,7 +8,14 @@ from quotexapi.stable_api import Quotex
 EMAIL = os.getenv("QUOTEX_EMAIL")
 PASSWORD = os.getenv("QUOTEX_PASSWORD")
 BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
-CHAT_IDS = [cid.strip() for cid in os.getenv("TELEGRAM_CHAT_IDS", "").split(",") if cid.strip()]
+
+# ---- SAFE CHAT ID LOADER ----
+raw_ids = os.getenv("TELEGRAM_CHAT_IDS", "")
+CHAT_IDS = []
+for cid in raw_ids.split(","):
+    cid = cid.strip()
+    if cid:
+        CHAT_IDS.append(cid)
 
 STICKER_CALL = os.getenv("STICKER_CALL")
 STICKER_PUT = os.getenv("STICKER_PUT")
@@ -20,7 +27,7 @@ app = Flask(__name__)
 
 @app.route("/")
 def health():
-    return "ENGINE_V12_4_REAL_SYNC_RUNNING", 200
+    return "ENGINE_V12_5_REAL_SYNC_TELEGRAM_FIXED", 200
 
 # ================= THREAD LOCK =================
 trade_lock = Lock()
@@ -28,23 +35,41 @@ trade_lock = Lock()
 # ================= TELEGRAM =================
 def send_telegram(text=None, sticker=None):
     if not BOT_TOKEN:
+        print("❌ TELEGRAM TOKEN MISSING")
         return
+
+    if not CHAT_IDS:
+        print("❌ CHAT IDS EMPTY")
+        return
+
     for chat_id in CHAT_IDS:
         try:
             if text:
-                requests.post(
+                r = requests.post(
                     f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-                    json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
+                    json={
+                        "chat_id": chat_id,
+                        "text": text,
+                        "parse_mode": "HTML"
+                    },
                     timeout=10
                 )
+                print("Telegram status:", r.status_code)
+                print("Telegram response:", r.text)
+
             if sticker:
-                requests.post(
+                r2 = requests.post(
                     f"https://api.telegram.org/bot{BOT_TOKEN}/sendSticker",
-                    json={"chat_id": chat_id, "sticker": sticker},
+                    json={
+                        "chat_id": chat_id,
+                        "sticker": sticker
+                    },
                     timeout=10
                 )
-        except:
-            pass
+                print("Sticker status:", r2.status_code)
+
+        except Exception as e:
+            print("Telegram exception:", e)
 
 # ================= ASSETS =================
 verified_assets = [
@@ -71,6 +96,7 @@ def connect():
         time.sleep(10)
 
 connect()
+send_telegram(text="🚀 BOT STARTED SUCCESSFULLY")
 
 # ================= GLOBAL STATS =================
 trade_active = False
@@ -141,7 +167,6 @@ def process_trade(pair, direction, entry_time):
 
     stats["total"] += 1
 
-    # DIRECT RESULT
     candle = wait_result(pair, entry_time)
     if candle is not None:
         win = (candle["close"] > candle["open"]) if direction=="CALL" else (candle["close"] < candle["open"])
@@ -154,7 +179,6 @@ def process_trade(pair, direction, entry_time):
         else:
             send_telegram(text=f"❌ <b>{asset_name} DIRECT LOSS</b>")
 
-    # MTG-1
     send_telegram(text="🔁 <b>MTG-1 STARTED</b>")
     mtg_candle = wait_result(pair, entry_time + 60)
 
@@ -208,7 +232,7 @@ def signal_loop():
     global trade_active
     last_min = None
 
-    print("🚀 ENGINE V12.4 REAL SYNC STARTED")
+    print("🚀 ENGINE V12.5 REAL SYNC STARTED")
 
     while True:
         now = datetime.now(IST)
@@ -228,7 +252,6 @@ def signal_loop():
 
                     last = df.iloc[-1]
 
-                    # 🔥 SERVER TIME SYNC PROTECTION
                     server_minute = (int(time.time()) // 60) * 60
                     if abs(int(last["time"]) - server_minute) > 2:
                         print(f"  > {pair}: Skipped (Time Misaligned)")
