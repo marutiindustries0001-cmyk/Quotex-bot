@@ -24,7 +24,7 @@ stats = {"win": 0, "loss": 0, "refund": 0, "total": 0}
 last_summary_date = None
 
 @app.route("/")
-def health(): return "GS_QUOTEX_V13_0_ULTIMATE_LIVE", 200
+def health(): return "GS_QUOTEX_V13_1_SILENT_ACTIVE", 200
 
 # ================= ASSETS =================
 verified_assets = [
@@ -70,11 +70,9 @@ def get_candles(asset):
         df["close"] = pd.to_numeric(df["close"])
         df["open"] = pd.to_numeric(df["open"])
         
-        # EMA
         df["ema7"] = df["close"].ewm(span=7, adjust=False).mean()
         df["ema21"] = df["close"].ewm(span=21, adjust=False).mean()
         
-        # Wilder's Smoothing RSI
         delta = df["close"].diff()
         gain = delta.where(delta > 0, 0)
         loss = -delta.where(delta < 0, 0)
@@ -138,7 +136,7 @@ def process_trade(pair, direction, entry_time):
 def signal_loop():
     global trade_active
     last_min = None
-    print("🚀 [START] V13.0 Ultimate Scanner Active", flush=True)
+    print("🚀 [START] V13.1 Silent Scanner Active", flush=True)
     
     while True:
         now = datetime.now(IST)
@@ -158,7 +156,6 @@ def signal_loop():
                     last = df.iloc[-1]
                     rsi, e7, e21 = round(last["rsi"], 2), round(last["ema7"], 4), round(last["ema21"], 4)
                     
-                    # Log Status for Monitor
                     status = "WAITING"
                     if rsi > 55 and e7 > e21: status = "CALL READY 🟢"
                     elif rsi < 45 and e7 < e21: status = "PUT READY 🔴"
@@ -187,7 +184,9 @@ def summary_loop():
 
 if __name__ == "__main__":
     connect() 
-    send_telegram("🚀 **GS Bot V13.0 Live!**\nAll systems integrated. Monitoring active.")
+    # Telegram Startup Message Removed (Only for Render Logs)
+    print("🚀 [SYSTEM] GS Bot Silent Mode Activated. No more Telegram spam on restart.", flush=True)
+    
     Thread(target=signal_loop, daemon=True).start()
     Thread(target=summary_loop, daemon=True).start()
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
