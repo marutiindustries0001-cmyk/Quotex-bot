@@ -24,7 +24,7 @@ stats = {"win": 0, "loss": 0, "refund": 0, "total": 0}
 last_summary_date = None
 
 @app.route("/")
-def health(): return "GS_QUOTEX_V12_9_8_STABLE_RUNNING", 200
+def health(): return "GS_QUOTEX_V12_9_8_1_STABLE_RUNNING", 200
 
 # ================= ASSETS =================
 verified_assets = [
@@ -144,13 +144,16 @@ def signal_loop():
                     time.sleep(1); continue
                 last_min = now.minute
                 
-                print(f"🔍 [SCAN] Monitoring {len(verified_assets)} Assets...", flush=True)
+                print(f"🔍 [SCANNING] {len(verified_assets)} Assets...", flush=True)
                 for pair in verified_assets:
                     df = get_candles(pair)
                     if df is None: continue
                     last = df.iloc[-1]
                     rsi, e7, e21 = round(last["rsi"], 2), round(last["ema7"], 4), round(last["ema21"], 4)
                     
+                    # Log monitoring status for each pair
+                    print(f"  > {pair} | RSI: {rsi} | Setup: {'READY' if (rsi > 55 or rsi < 45) else 'WAITING'}", flush=True)
+
                     if rsi > 55 and e7 > e21:
                         trade_active = True
                         Thread(target=process_trade, args=(pair, "CALL", int(last["time"]) + 60)).start()
@@ -178,7 +181,7 @@ def summary_loop():
 
 if __name__ == "__main__":
     connect() 
-    send_telegram("🚀 **GS Bot Live!**\nFast Institutional Strategy (RSI 55/45) Verified.")
+    send_telegram("🚀 **GS Bot Live!**\nMonitor monitoring and Heartbeat active.")
     Thread(target=signal_loop, daemon=True).start()
     Thread(target=summary_loop, daemon=True).start()
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
