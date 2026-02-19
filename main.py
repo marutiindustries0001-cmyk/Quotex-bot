@@ -4,7 +4,7 @@ from threading import Thread, Lock
 from flask import Flask
 from quotexapi.stable_api import Quotex
 
-# ================= 🛠️ ENV & CONFIG (Wahi Sari Settings) =================
+# ================= 🛠️ ENV & CONFIG =================
 EMAIL = os.getenv("QUOTEX_EMAIL")
 PASSWORD = os.getenv("QUOTEX_PASSWORD")
 BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -24,15 +24,13 @@ last_login_time = datetime.now()
 last_summary_date = None
 
 @app.route("/")
-def health(): return "GS_V16_2_FULL_STABLE_ACTIVE", 200
+def health(): return "GS_V16_3_SAFE_LIQUID_ACTIVE", 200
 
-# ================= 📊 ASSETS =================
+# ================= 📊 TOP 12 LIQUID ASSETS (Filtered) =================
 verified_assets = [
     "EURUSD_otc","GBPUSD_otc","USDJPY_otc","AUDUSD_otc",
-    "EURJPY_otc","GBPJPY_otc","EURGBP_otc","USDCHF_otc",
-    "USDINR_otc","USDBRL_otc","USDTRY_otc",
-    "USDBDT_otc","USDPKR_otc","USDMXN_otc",
-    "EURUSD","GBPUSD","USDJPY","AUDUSD","EURJPY","GBPJPY","EURGBP","USDCHF"
+    "EURJPY_otc","GBPJPY_otc","USDINR_otc","USDBRL_otc",
+    "USDTRY_otc","USDPKR_otc","EURGBP_otc","USDCHF_otc"
 ]
 
 def send_telegram(text=None, sticker=None):
@@ -47,14 +45,14 @@ def send_telegram(text=None, sticker=None):
 
 def connect():
     global client, last_login_time
-    print(f"[DEBUG] Initiating Stability Sync...", flush=True)
+    print(f"[DEBUG] Re-establishing Safe Connection...", flush=True)
     try:
         client = Quotex(email=EMAIL, password=PASSWORD)
         ok, _ = client.connect()
         if ok:
             last_login_time = datetime.now()
-            print("✅ [SUCCESS] Session Established. Cooling down 10s...", flush=True)
-            time.sleep(10)
+            print("✅ [SUCCESS] Session Stable. Cooling 15s...", flush=True)
+            time.sleep(15) # Extended cooling
             return True
     except: pass
     return False
@@ -64,7 +62,8 @@ connect()
 def get_candles(asset):
     global client
     try:
-        candles = client.get_candles(asset, 60, 60)
+        # Reduced candle count for faster, safer response
+        candles = client.get_candles(asset, 60, 50)
         if candles and len(candles) >= 20:
             df = pd.DataFrame(candles)
             df["close"] = pd.to_numeric(df["close"])
@@ -79,18 +78,18 @@ def get_candles(asset):
     return None
 
 def verify_result(pair, entry_time, direction):
-    time.sleep(68) # Wait for Candle Close
+    time.sleep(70) 
     for _ in range(3):
         df = get_candles(pair)
         if df is not None:
             match = df[df["time"] == entry_time]
             if not match.empty:
                 o, c = float(match.iloc[0]["open"]), float(match.iloc[0]["close"])
-                print(f"⚖️ [RESULT] {pair} | O: {round(o,6)} | C: {round(c,6)}", flush=True)
+                print(f"⚖️ [SYNC] {pair} | O: {round(o,6)} | C: {round(c,6)}", flush=True)
                 if round(o, 6) == round(c, 6): return "TIE"
                 if direction == "CALL": return "WIN" if c > o else "LOSS"
                 else: return "WIN" if c < o else "LOSS"
-        time.sleep(3)
+        time.sleep(5)
     return "ERROR"
 
 def trade_engine(pair, direction, entry_time):
@@ -103,12 +102,12 @@ def trade_engine(pair, direction, entry_time):
     res = verify_result(pair, entry_time, direction)
     if res == "WIN":
         stats["win"] += 1
-        send_telegram(text=f"✅ <b>{label} DIRECT WIN!</b>", sticker=STICKER_WIN)
+        send_telegram(text=f"✅ <b>{label} WIN!</b>", sticker=STICKER_WIN)
     elif res == "TIE":
         stats["refund"] += 1
         send_telegram(text=f"💸 <b>{label} REFUND (TIE)</b>")
     elif res == "LOSS":
-        send_telegram(text=f"❌ <b>{label} DIRECT LOSS</b>\n🔁 <b>MTG-1 STARTED</b>")
+        send_telegram(text=f"❌ <b>{label} LOSS</b>\n🔁 <b>MTG-1 STARTED</b>")
         m_res = verify_result(pair, entry_time + 60, direction)
         if m_res == "WIN":
             stats["win"] += 1
@@ -126,24 +125,24 @@ def core_loop():
     last_min = None
     while True:
         now = datetime.now(IST)
-        if datetime.now() - last_login_time > timedelta(minutes=25): connect()
+        if datetime.now() - last_login_time > timedelta(minutes=20): connect()
 
-        if now.second == 20:
+        if now.second == 10: # Start scan early (10s) because we are slow
             with trade_lock:
                 if trade_active or last_min == now.minute:
                     time.sleep(1); continue
                 last_min = now.minute
                 
-                print(f"🔍 [SCAN] Checking 22 Assets...", flush=True)
+                print(f"🔍 [SCAN] Checking 12 Assets (Safe Mode)...", flush=True)
                 err_streak = 0
                 for pair in verified_assets:
-                    time.sleep(1.5) # Human-like throttle
+                    time.sleep(3.5) # ULTRA-SAFE GAP
                     df = get_candles(pair)
                     
                     if df is None:
                         err_streak += 1
                         print(f"   > {pair} | ⚠️ Syncing...", flush=True)
-                        if err_streak >= 5:
+                        if err_streak >= 3:
                             connect()
                             break
                         continue
@@ -171,12 +170,12 @@ def summary_loop():
             last_summary_date = now.date()
             total, win, loss, refund = stats["total"], stats["win"], stats["loss"], stats["refund"]
             rate = (win / (total - refund) * 100) if (total - refund) > 0 else 0
-            send_telegram(text=f"📊 <b>NIGHT SUMMARY</b>\n━━━━━━━━━━\n✅ Win: {win} | ❌ Loss: {loss} | 💸 Refund: {refund}\n📈 Acc: {rate:.2f}%")
+            send_telegram(text=f"📊 <b>DAILY SUMMARY</b>\nWin: {win} | Refund: {refund}\nAcc: {rate:.2f}%")
             stats = {"win": 0, "loss": 0, "refund": 0, "total": 0}
         time.sleep(30)
 
 if __name__ == "__main__":
     Thread(target=lambda: app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)), use_reloader=False)).start()
-    send_telegram("🚀 **GS V16.2 FULL LIVE**\nAll Features & Stability Engine Enabled.")
+    send_telegram("🚀 **GS V16.3 SAFE-LIQUID**\nUltra-Safe Scanning Activated.")
     Thread(target=summary_loop, daemon=True).start()
     core_loop()
