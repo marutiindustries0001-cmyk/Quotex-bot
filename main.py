@@ -17,14 +17,14 @@ IST = pytz.timezone("Asia/Kolkata")
 app = Flask(__name__)
 trade_lock = Lock()
 
-# Global Variables
+# Global States
 client = None
 trade_active = False
 stats = {"win": 0, "loss": 0, "refund": 0, "total": 0}
 last_summary_date = None
 
 @app.route("/")
-def health(): return "GS_QUOTEX_V12_9_4_CRASH_FIXED", 200
+def health(): return "GS_QUOTEX_V12_9_8_STABLE_RUNNING", 200
 
 # ================= ASSETS =================
 verified_assets = [
@@ -47,22 +47,18 @@ def send_telegram(text=None, sticker=None):
                 time.sleep(0.5)
                 requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendSticker", 
                                     json={"chat_id": chat_id, "sticker": sticker}, timeout=10)
-        except Exception as e:
-            print(f"❌ [TELEGRAM ERROR] {e}", flush=True)
+        except Exception as e: print(f"❌ [TG ERROR] {e}", flush=True)
 
 # ================= CONNECTION =================
 def connect():
     global client
     while True:
         try:
-            print(f"[DEBUG] Syncing with Quotex: {EMAIL}", flush=True)
+            print(f"[DEBUG] Establishing Deep-Sync: {EMAIL}", flush=True)
             client = Quotex(email=EMAIL, password=PASSWORD)
             ok, _ = client.connect()
-            if ok: 
-                print("✅ [SUCCESS] Institutional Deep-Sync Established", flush=True)
-                return
-        except Exception as e:
-            print(f"❌ [CONN ERROR] {e}", flush=True)
+            if ok: return print("✅ [SUCCESS] Institutional Sync Established", flush=True)
+        except: pass
         time.sleep(10)
 
 # ================= DATA ENGINE =================
@@ -82,7 +78,7 @@ def get_candles(asset):
         return df
     except: return None
 
-# ================= RESULT VERIFIER =================
+# ================= RESULT ENGINE =================
 def verify_strict_result(pair, entry_time, direction):
     target_wait = entry_time + 65
     while int(time.time()) < target_wait: time.sleep(1)
@@ -92,9 +88,9 @@ def verify_strict_result(pair, entry_time, direction):
             match = df[df["time"] == entry_time]
             if not match.empty:
                 candle = match.iloc[0]
-                o, c = float(candle["open"]), float(candle["close"])
-                print(f"⚖️ [SYNC CHECK] {pair} | O: {round(o,6)} | C: {round(c,6)}", flush=True)
-                if round(o, 6) == round(c, 6): return "TIE"
+                o, c = round(float(candle["open"]), 6), round(float(candle["close"]), 6)
+                print(f"⚖️ [CHECK] {pair} | O: {o} | C: {c}", flush=True)
+                if o == c: return "TIE"
                 if direction == "CALL": return "WIN" if c > o else "LOSS"
                 if direction == "PUT": return "WIN" if c < o else "LOSS"
         time.sleep(2)
@@ -104,7 +100,7 @@ def verify_strict_result(pair, entry_time, direction):
 def process_trade(pair, direction, entry_time):
     global trade_active, stats
     asset_label = pair.replace("_otc", "-OTC").upper()
-    print(f"🚀 [SIGNAL] Executing {asset_label} | {direction}", flush=True)
+    print(f"🚀 [SIGNAL] Triggered: {asset_label} | {direction}", flush=True)
     
     send_telegram(text=f"🎯 <b>VIP SIGNAL: {asset_label}</b>\n📊 <b>DIR:</b> {'🟢 CALL' if direction=='CALL' else '🔴 PUT'}\n⏰ <b>TIME:</b> {datetime.fromtimestamp(entry_time, IST).strftime('%H:%M')}", 
                   sticker=STICKER_CALL if direction=="CALL" else STICKER_PUT)
@@ -129,22 +125,18 @@ def process_trade(pair, direction, entry_time):
         else:
             stats["loss"] += 1
             send_telegram(text=f"❌ <b>{asset_label} LOSS</b>", sticker=STICKER_LOSS)
-    
-    with trade_lock:
-        trade_active = False
+    with trade_lock: trade_active = False
 
 # ================= SIGNAL LOOP =================
 def signal_loop():
     global trade_active
     last_min = None
-    print("🚀 [LOOP] Signal Scanner Loop Started", flush=True)
+    print("🚀 [LOOP] Fast Strategy Scanner Active", flush=True)
     
     while True:
         now = datetime.now(IST)
-        
         if now.second == 0:
-            print(f"--- ⏰ Heartbeat: Scanner Active @ {now.strftime('%H:%M:%S')} ---", flush=True)
-            time.sleep(1)
+            print(f"--- ⏰ Heartbeat: Active @ {now.strftime('%H:%M:%S')} ---", flush=True)
 
         if now.second == 20: 
             with trade_lock:
@@ -152,18 +144,18 @@ def signal_loop():
                     time.sleep(1); continue
                 last_min = now.minute
                 
-                print(f"🔍 [SCAN] Checking {len(verified_assets)} Assets...", flush=True)
+                print(f"🔍 [SCAN] Monitoring {len(verified_assets)} Assets...", flush=True)
                 for pair in verified_assets:
                     df = get_candles(pair)
                     if df is None: continue
                     last = df.iloc[-1]
                     rsi, e7, e21 = round(last["rsi"], 2), round(last["ema7"], 4), round(last["ema21"], 4)
                     
-                    if rsi > 60 and e7 > e21:
+                    if rsi > 55 and e7 > e21:
                         trade_active = True
                         Thread(target=process_trade, args=(pair, "CALL", int(last["time"]) + 60)).start()
                         break
-                    elif rsi < 40 and e7 < e21:
+                    elif rsi < 45 and e7 < e21:
                         trade_active = True
                         Thread(target=process_trade, args=(pair, "PUT", int(last["time"]) + 60)).start()
                         break
@@ -184,11 +176,9 @@ def summary_loop():
             stats = {"win": 0, "loss": 0, "refund": 0, "total": 0}
         time.sleep(30)
 
-# ================= MAIN START =================
 if __name__ == "__main__":
     connect() 
-    send_telegram("🚀 **GS Bot Live!**\nScanner crash fix applied. Monitoring active.")
-    
+    send_telegram("🚀 **GS Bot Live!**\nFast Institutional Strategy (RSI 55/45) Verified.")
     Thread(target=signal_loop, daemon=True).start()
     Thread(target=summary_loop, daemon=True).start()
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
