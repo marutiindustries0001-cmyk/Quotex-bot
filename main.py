@@ -1,10 +1,10 @@
 import os, time, pytz, requests, pandas as pd, sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from threading import Thread, Lock
 from flask import Flask
 from quotexapi.stable_api import Quotex
 
-# ================= ENV & CONFIG =================
+# ================= CONFIG =================
 EMAIL = os.getenv("QUOTEX_EMAIL")
 PASSWORD = os.getenv("QUOTEX_PASSWORD")
 BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -17,13 +17,14 @@ IST = pytz.timezone("Asia/Kolkata")
 app = Flask(__name__)
 trade_lock = Lock()
 
+# Global States
 client = None
 trade_active = False
 stats = {"win": 0, "loss": 0, "refund": 0, "total": 0}
-last_summary_date = None
+last_reconnect = datetime.now()
 
 @app.route("/")
-def health(): return "GS_QUOTEX_V13_1_STABLE_ACTIVE", 200
+def health(): return "GS_V14_ULTIMATE_ONLINE", 200
 
 # ================= ASSETS =================
 verified_assets = [
@@ -40,26 +41,32 @@ def send_telegram(text=None, sticker=None):
         try:
             if text: requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": text, "parse_mode":"HTML"}, timeout=10)
             if sticker:
-                time.sleep(0.5)
+                time.sleep(0.4)
                 requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendSticker", json={"chat_id": chat_id, "sticker": sticker}, timeout=10)
         except: pass
 
 def connect():
-    global client
-    while True:
-        try:
-            print(f"[DEBUG] Syncing Institutional Data: {EMAIL}", flush=True)
-            client = Quotex(email=EMAIL, password=PASSWORD)
-            ok, _ = client.connect()
-            if ok: 
-                print("✅ [SUCCESS] Institutional Sync Established", flush=True)
-                return True
-        except: pass
-        time.sleep(10)
+    global client, last_reconnect
+    print(f"🔄 [SYSTEM] Refreshing Quotex Session...", flush=True)
+    try:
+        if client: client.close()
+        client = Quotex(email=EMAIL, password=PASSWORD)
+        ok, _ = client.connect()
+        if ok:
+            last_reconnect = datetime.now()
+            print("✅ [SUCCESS] Session Active & Synced", flush=True)
+            return True
+    except Exception as e:
+        print(f"❌ [ERROR] Login Failed: {e}", flush=True)
+    return False
 
-def get_candles(asset):
-    # Data fetch karne ke liye 2 attempts
-    for _ in range(2):
+# Initial Connection
+connect()
+
+def get_candles_safe(asset):
+    global client
+    # 3 Micro-retries for high stability
+    for _ in range(3):
         try:
             candles = client.get_candles(asset, 60, 100)
             if candles and len(candles) >= 30:
@@ -74,102 +81,118 @@ def get_candles(asset):
                 df["rsi"] = 100 - (100 / (1 + (gain / (loss + 1e-10))))
                 return df
         except:
-            time.sleep(1)
+            time.sleep(0.3)
     return None
 
-def verify_strict_result(pair, entry_time, direction):
-    target_wait = entry_time + 65
-    while int(time.time()) < target_wait: time.sleep(1)
+def verify_result(pair, entry_time, direction):
+    # Wait for candle close (60s) + verification buffer (10s)
+    wait_until = entry_time + 70
+    while int(time.time()) < wait_until: time.sleep(1)
+    
     for _ in range(3):
-        df = get_candles(pair)
+        df = get_candles_safe(pair)
         if df is not None:
             match = df[df["time"] == entry_time]
             if not match.empty:
-                candle = match.iloc[0]
-                o, c = float(candle["open"]), float(candle["close"])
-                print(f"⚖️ [SYNC CHECK] {pair} | O: {round(o,6)} | C: {round(c,6)}", flush=True)
-                if round(o, 6) == round(c, 6): return "TIE"
-                if direction == "CALL": return "WIN" if c > o else "LOSS"
-                if direction == "PUT": return "WIN" if c < o else "LOSS"
+                c = match.iloc[0]
+                o, cl = float(c["open"]), float(c["close"])
+                print(f"⚖️ [VERIFY] {pair} | O: {round(o,6)} C: {round(cl,6)}", flush=True)
+                if round(o, 6) == round(cl, 6): return "TIE"
+                if direction == "CALL": return "WIN" if cl > o else "LOSS"
+                else: return "WIN" if cl < o else "LOSS"
         time.sleep(2)
     return "ERROR"
 
-def process_trade(pair, direction, entry_time):
+def trade_engine(pair, direction, entry_time):
     global trade_active, stats
-    asset_label = pair.replace("_otc", "-OTC").upper()
-    send_telegram(text=f"🎯 <b>VIP SIGNAL: {asset_label}</b>\n📊 <b>DIR:</b> {'🟢 CALL' if direction=='CALL' else '🔴 PUT'}\n⏰ <b>TIME:</b> {datetime.fromtimestamp(entry_time, IST).strftime('%H:%M')}", sticker=STICKER_CALL if direction=="CALL" else STICKER_PUT)
+    label = pair.replace("_otc", "-OTC").upper()
+    send_telegram(text=f"🎯 <b>VIP SIGNAL: {label}</b>\n📊 <b>DIR:</b> {'🟢 CALL' if direction=='CALL' else '🔴 PUT'}\n⏰ <b>TIME:</b> {datetime.fromtimestamp(entry_time, IST).strftime('%H:%M')}", sticker=STICKER_CALL if direction=="CALL" else STICKER_PUT)
     stats["total"] += 1
-    res = verify_strict_result(pair, entry_time, direction)
+
+    # Direct Result
+    res = verify_result(pair, entry_time, direction)
     if res == "WIN":
         stats["win"] += 1
-        send_telegram(text=f"✅ <b>{asset_label} DIRECT WIN!</b>", sticker=STICKER_WIN)
+        send_telegram(text=f"✅ <b>{label} DIRECT WIN!</b>", sticker=STICKER_WIN)
     elif res == "TIE":
         stats["refund"] += 1
-        send_telegram(text=f"💸 <b>{asset_label} PAYMENT RETURNED (TIE)</b>")
+        send_telegram(text=f"💸 <b>{label} REFUND (TIE)</b>")
     elif res == "LOSS":
-        send_telegram(text=f"❌ <b>{asset_label} DIRECT LOSS</b>\n🔁 <b>MTG-1 STARTED</b>")
-        mtg_res = verify_strict_result(pair, entry_time + 60, direction)
-        if mtg_res == "WIN":
+        send_telegram(text=f"❌ <b>{label} DIRECT LOSS</b>\n🔁 <b>MTG-1 STARTED</b>")
+        m_res = verify_result(pair, entry_time + 60, direction)
+        if m_res == "WIN":
             stats["win"] += 1
-            send_telegram(text=f"✅ <b>{asset_label} MTG WIN!</b>", sticker=STICKER_WIN)
-        elif mtg_res == "TIE":
+            send_telegram(text=f"✅ <b>{label} MTG WIN!</b>", sticker=STICKER_WIN)
+        elif m_res == "TIE":
             stats["refund"] += 1
-            send_telegram(text=f"💸 <b>{asset_label} MTG REFUND (TIE)</b>")
+            send_telegram(text=f"💸 <b>{label} MTG REFUND (TIE)</b>")
         else:
             stats["loss"] += 1
-            send_telegram(text=f"❌ <b>{asset_label} LOSS</b>", sticker=STICKER_LOSS)
+            send_telegram(text=f"❌ <b>{label} LOSS</b>", sticker=STICKER_LOSS)
+    
     with trade_lock: trade_active = False
 
-def signal_loop():
-    global trade_active, client
+def scanner_loop():
+    global trade_active, last_reconnect
     last_min = None
+    print("🚀 [START] GS Ultimate Scanner V14 Active", flush=True)
+    
     while True:
         now = datetime.now(IST)
+        
+        # 1. Proactive Session Refresh (Every 20 mins)
+        if datetime.now() - last_reconnect > timedelta(minutes=20):
+            connect()
+
+        # 2. Heartbeat (Every minute 00s)
         if now.second == 0:
-            print(f"--- ⏰ Heartbeat: Active @ {now.strftime('%H:%M:%S')} ---", flush=True)
+            print(f"--- ⏰ Heartbeat: {now.strftime('%H:%M:%S')} ---", flush=True)
             sys.stdout.flush()
-        if now.second == 20: 
+
+        # 3. Scan (Every minute 20s -> 40s Early Entry)
+        if now.second == 20:
             with trade_lock:
                 if trade_active or last_min == now.minute:
                     time.sleep(1); continue
                 last_min = now.minute
-                print(f"🔍 [SCAN START] Checking {len(verified_assets)} Assets...", flush=True)
-                sys.stdout.flush()
+                
+                print(f"🔍 [SCAN] Checking 22 Assets...", flush=True)
                 for pair in verified_assets:
-                    df = get_candles(pair)
+                    df = get_candles_safe(pair)
                     if df is None:
                         print(f"   > {pair} | ⚠️ Re-syncing...", flush=True)
                         continue
-                    last = df.iloc[-1]
-                    rsi, e7, e21 = round(last["rsi"], 2), round(last["ema7"], 4), round(last["ema21"], 4)
+                    
+                    l = df.iloc[-1]
+                    rsi, e7, e21 = round(l["rsi"], 2), round(l["ema7"], 4), round(l["ema21"], 4)
                     print(f"   > {pair} | RSI: {rsi} | E7: {e7} | E21: {e21}", flush=True)
-                    sys.stdout.flush()
+                    
                     if rsi > 55 and e7 > e21:
                         trade_active = True
-                        Thread(target=process_trade, args=(pair, "CALL", int(last["time"]) + 60)).start()
+                        Thread(target=trade_engine, args=(pair, "CALL", int(l["time"]) + 60)).start()
                         break
                     elif rsi < 45 and e7 < e21:
                         trade_active = True
-                        Thread(target=process_trade, args=(pair, "PUT", int(last["time"]) + 60)).start()
+                        Thread(target=trade_engine, args=(pair, "PUT", int(l["time"]) + 60)).start()
                         break
         time.sleep(0.5)
 
-def summary_loop():
-    global stats, last_summary_date
+def report_loop():
+    global stats
     while True:
         now = datetime.now(IST)
-        if now.strftime("%H:%M") == "23:59" and last_summary_date != now.date():
-            last_summary_date = now.date()
-            total, win, loss, refund = stats["total"], stats["win"], stats["loss"], stats["refund"]
-            net_total = total - refund
-            rate = (win / net_total * 100) if net_total > 0 else 0
-            send_telegram(text=f"📊 <b>DAILY NIGHT SUMMARY</b>\n━━━━━━━━━━━━━━━━━━\n✅ Wins: {win} | ❌ Loss: {loss} | 💸 Refund: {refund}\n📈 Accuracy: {rate:.2f}%\n━━━━━━━━━━━━━━━━━━")
+        if now.strftime("%H:%M") == "23:59":
+            total, win, refund = stats["total"], stats["win"], stats["refund"]
+            rate = (win / (total - refund) * 100) if (total - refund) > 0 else 0
+            send_telegram(text=f"📊 <b>NIGHT SUMMARY</b>\nWin: {win} | Refund: {refund}\nAcc: {rate:.2f}%")
             stats = {"win": 0, "loss": 0, "refund": 0, "total": 0}
+            time.sleep(60)
         time.sleep(30)
 
 if __name__ == "__main__":
-    connect() 
-    send_telegram("🚀 **GS Bot Live!**\nStability mode activated (No-Data fix).")
-    Thread(target=signal_loop, daemon=True).start()
-    Thread(target=summary_loop, daemon=True).start()
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+    # Start Flask as background thread
+    Thread(target=lambda: app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)), use_reloader=False)).start()
+    
+    send_telegram("🚀 **GS V14 ULTIMATE LIVE**\nStability Engine & Auto-Refresh Enabled.")
+    Thread(target=report_loop, daemon=True).start()
+    scanner_loop()
