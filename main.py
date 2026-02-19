@@ -18,7 +18,7 @@ app = Flask(__name__)
 trade_lock = Lock()
 
 @app.route("/")
-def health(): return "GS_QUOTEX_V12_9_1_ENV_TEST_ACTIVE", 200
+def health(): return "GS_QUOTEX_V12_9_3_LOGS_ACTIVE", 200
 
 # ================= ASSETS =================
 verified_assets = [
@@ -42,7 +42,7 @@ def send_telegram(text=None, sticker=None):
                 requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendSticker", 
                                     json={"chat_id": chat_id, "sticker": sticker}, timeout=10)
         except Exception as e:
-            print(f"❌ [TELEGRAM ERROR] {e}")
+            print(f"❌ [TELEGRAM ERROR] {e}", flush=True)
 
 # ================= CONNECTION =================
 client = None
@@ -50,19 +50,15 @@ def connect():
     global client
     while True:
         try:
-            print(f"[DEBUG] Syncing with Quotex: {EMAIL}")
+            print(f"[DEBUG] Syncing with Quotex: {EMAIL}", flush=True)
             client = Quotex(email=EMAIL, password=PASSWORD)
             ok, _ = client.connect()
-            if ok: return print("✅ [SUCCESS] Institutional Deep-Sync Established")
-        except: pass
+            if ok: 
+                print("✅ [SUCCESS] Institutional Deep-Sync Established", flush=True)
+                return
+        except Exception as e:
+            print(f"❌ [CONN ERROR] {e}", flush=True)
         time.sleep(10)
-
-connect()
-
-# ================= GLOBAL STATS =================
-trade_active = False
-stats = {"win": 0, "loss": 0, "refund": 0, "total": 0}
-last_summary_date = None
 
 # ================= DATA ENGINE =================
 def get_candles(asset):
@@ -92,7 +88,7 @@ def verify_strict_result(pair, entry_time, direction):
             if not match.empty:
                 candle = match.iloc[0]
                 o, c = float(candle["open"]), float(candle["close"])
-                print(f"⚖️ [SYNC CHECK] {pair} | O: {round(o,6)} | C: {round(c,6)}")
+                print(f"⚖️ [SYNC CHECK] {pair} | O: {round(o,6)} | C: {round(c,6)}", flush=True)
                 if round(o, 6) == round(c, 6): return "TIE"
                 if direction == "CALL": return "WIN" if c > o else "LOSS"
                 if direction == "PUT": return "WIN" if c < o else "LOSS"
@@ -103,6 +99,8 @@ def verify_strict_result(pair, entry_time, direction):
 def process_trade(pair, direction, entry_time):
     global trade_active, stats
     asset_label = pair.replace("_otc", "-OTC").upper()
+    print(f"🚀 [SIGNAL] Found signal on {asset_label} | Direction: {direction}", flush=True)
+    
     send_telegram(text=f"🎯 <b>VIP SIGNAL: {asset_label}</b>\n📊 <b>DIR:</b> {'🟢 CALL' if direction=='CALL' else '🔴 PUT'}\n⏰ <b>TIME:</b> {datetime.fromtimestamp(entry_time, IST).strftime('%H:%M')}", 
                   sticker=STICKER_CALL if direction=="CALL" else STICKER_PUT)
     stats["total"] += 1
@@ -132,19 +130,32 @@ def process_trade(pair, direction, entry_time):
 def signal_loop():
     global trade_active
     last_min = None
+    print("🚀 [LOOP] Signal Scanner Loop Started", flush=True)
+    
     while True:
         now = datetime.now(IST)
-        if now.second == 20:
+        
+        # Every minute Heartbeat log to keep Render active
+        if now.second == 0:
+            print(f"--- ⏰ Heartbeat: Scanner Active @ {now.strftime('%H:%M:%S')} ---", flush=True)
+            time.sleep(1)
+
+        if now.second == 20: # 40s Early Entry Scan
             with trade_lock:
                 if trade_active or last_min == now.minute:
                     time.sleep(1); continue
                 last_min = now.minute
+                
+                print(f"🔍 [SCAN] Checking {len(verified_assets)} Assets at 20th second...", flush=True)
                 for pair in verified_assets:
                     df = get_candles(pair)
                     if df is None: continue
                     last = df.iloc[-1]
                     rsi, e7, e21 = round(last["rsi"], 2), round(last["ema7"], 4), round(last["ema21"], 4)
-                    print(f"🔍 {pair} | RSI: {rsi} | E7: {e7} | E21: {e21}")
+                    
+                    # Print current metrics for each asset
+                    print(f"  > {pair} | RSI: {rsi} | E7: {e7} | E21: {e21}", flush=True)
+
                     if rsi > 60 and e7 > e21:
                         trade_active = True
                         Thread(target=process_trade, args=(pair, "CALL", int(last["time"]) + 60)).start()
@@ -153,7 +164,7 @@ def signal_loop():
                         trade_active = True
                         Thread(target=process_trade, args=(pair, "PUT", int(last["time"]) + 60)).start()
                         break
-        time.sleep(1)
+        time.sleep(0.5)
 
 # ================= SUMMARY =================
 def summary_loop():
@@ -171,14 +182,11 @@ def summary_loop():
 
 # ================= MAIN START =================
 if __name__ == "__main__":
-    # ENV Debugging in Logs
-    print(f"--- 🛠️ ENV DEBUG ---")
-    print(f"Token Found: {'✅ Yes' if BOT_TOKEN else '❌ No'}")
-    print(f"Total Chat IDs: {len(CHAT_IDS)}")
-    print(f"--------------------")
+    print(f"--- 🛠️ SYSTEM STARTUP ---", flush=True)
+    connect() 
     
-    # Send Test Message on Startup
-    send_telegram("🚀 **GS Bot Live & Environment Read Successful!**\nScanning shuru ho gayi hai bhai.")
+    # Send Test Message
+    send_telegram("🚀 **GS Bot Live!**\nScanning logic activated and Heartbeat logs started.")
     
     Thread(target=signal_loop, daemon=True).start()
     Thread(target=summary_loop, daemon=True).start()
