@@ -17,8 +17,14 @@ IST = pytz.timezone("Asia/Kolkata")
 app = Flask(__name__)
 trade_lock = Lock()
 
+# Global Variables
+client = None
+trade_active = False
+stats = {"win": 0, "loss": 0, "refund": 0, "total": 0}
+last_summary_date = None
+
 @app.route("/")
-def health(): return "GS_QUOTEX_V12_9_3_LOGS_ACTIVE", 200
+def health(): return "GS_QUOTEX_V12_9_4_CRASH_FIXED", 200
 
 # ================= ASSETS =================
 verified_assets = [
@@ -45,7 +51,6 @@ def send_telegram(text=None, sticker=None):
             print(f"❌ [TELEGRAM ERROR] {e}", flush=True)
 
 # ================= CONNECTION =================
-client = None
 def connect():
     global client
     while True:
@@ -99,7 +104,7 @@ def verify_strict_result(pair, entry_time, direction):
 def process_trade(pair, direction, entry_time):
     global trade_active, stats
     asset_label = pair.replace("_otc", "-OTC").upper()
-    print(f"🚀 [SIGNAL] Found signal on {asset_label} | Direction: {direction}", flush=True)
+    print(f"🚀 [SIGNAL] Executing {asset_label} | {direction}", flush=True)
     
     send_telegram(text=f"🎯 <b>VIP SIGNAL: {asset_label}</b>\n📊 <b>DIR:</b> {'🟢 CALL' if direction=='CALL' else '🔴 PUT'}\n⏰ <b>TIME:</b> {datetime.fromtimestamp(entry_time, IST).strftime('%H:%M')}", 
                   sticker=STICKER_CALL if direction=="CALL" else STICKER_PUT)
@@ -124,7 +129,9 @@ def process_trade(pair, direction, entry_time):
         else:
             stats["loss"] += 1
             send_telegram(text=f"❌ <b>{asset_label} LOSS</b>", sticker=STICKER_LOSS)
-    with trade_lock: trade_active = False
+    
+    with trade_lock:
+        trade_active = False
 
 # ================= SIGNAL LOOP =================
 def signal_loop():
@@ -135,27 +142,23 @@ def signal_loop():
     while True:
         now = datetime.now(IST)
         
-        # Every minute Heartbeat log to keep Render active
         if now.second == 0:
             print(f"--- ⏰ Heartbeat: Scanner Active @ {now.strftime('%H:%M:%S')} ---", flush=True)
             time.sleep(1)
 
-        if now.second == 20: # 40s Early Entry Scan
+        if now.second == 20: 
             with trade_lock:
                 if trade_active or last_min == now.minute:
                     time.sleep(1); continue
                 last_min = now.minute
                 
-                print(f"🔍 [SCAN] Checking {len(verified_assets)} Assets at 20th second...", flush=True)
+                print(f"🔍 [SCAN] Checking {len(verified_assets)} Assets...", flush=True)
                 for pair in verified_assets:
                     df = get_candles(pair)
                     if df is None: continue
                     last = df.iloc[-1]
                     rsi, e7, e21 = round(last["rsi"], 2), round(last["ema7"], 4), round(last["ema21"], 4)
                     
-                    # Print current metrics for each asset
-                    print(f"  > {pair} | RSI: {rsi} | E7: {e7} | E21: {e21}", flush=True)
-
                     if rsi > 60 and e7 > e21:
                         trade_active = True
                         Thread(target=process_trade, args=(pair, "CALL", int(last["time"]) + 60)).start()
@@ -174,7 +177,8 @@ def summary_loop():
         if now.strftime("%H:%M") == "23:59" and last_summary_date != now.date():
             last_summary_date = now.date()
             total, win, loss, refund = stats["total"], stats["win"], stats["loss"], stats["refund"]
-            rate = (win / (total - refund) * 100) if (total - refund) > 0 else 0
+            net_total = total - refund
+            rate = (win / net_total * 100) if net_total > 0 else 0
             report = (f"📊 <b>DAILY NIGHT SUMMARY</b>\n━━━━━━━━━━━━━━━━━━\n✅ <b>Wins:</b> {win}\n❌ <b>Losses:</b> {loss}\n💸 <b>Refunds:</b> {refund}\n📈 <b>Accuracy:</b> {rate:.2f}%\n━━━━━━━━━━━━━━━━━━")
             send_telegram(text=report)
             stats = {"win": 0, "loss": 0, "refund": 0, "total": 0}
@@ -182,11 +186,8 @@ def summary_loop():
 
 # ================= MAIN START =================
 if __name__ == "__main__":
-    print(f"--- 🛠️ SYSTEM STARTUP ---", flush=True)
     connect() 
-    
-    # Send Test Message
-    send_telegram("🚀 **GS Bot Live!**\nScanning logic activated and Heartbeat logs started.")
+    send_telegram("🚀 **GS Bot Live!**\nScanner crash fix applied. Monitoring active.")
     
     Thread(target=signal_loop, daemon=True).start()
     Thread(target=summary_loop, daemon=True).start()
