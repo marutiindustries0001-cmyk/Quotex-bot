@@ -17,14 +17,13 @@ IST = pytz.timezone("Asia/Kolkata")
 app = Flask(__name__)
 trade_lock = Lock()
 
-# Global States
 client = None
 trade_active = False
 stats = {"win": 0, "loss": 0, "refund": 0, "total": 0}
 last_summary_date = None
 
 @app.route("/")
-def health(): return "GS_QUOTEX_V12_9_7_LIVE_LOGS_ACTIVE", 200
+def health(): return "GS_QUOTEX_V12_9_8_ULTRA_LOGS_ACTIVE", 200
 
 # ================= ASSETS =================
 verified_assets = [
@@ -35,27 +34,21 @@ verified_assets = [
     "EURUSD","GBPUSD","USDJPY","AUDUSD","EURJPY","GBPJPY","EURGBP","USDCHF"
 ]
 
-# ================= TELEGRAM ENGINE =================
 def send_telegram(text=None, sticker=None):
     if not BOT_TOKEN: return
     for chat_id in CHAT_IDS:
         try:
-            if text:
-                requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", 
-                              json={"chat_id": chat_id, "text": text, "parse_mode":"HTML"}, timeout=10)
+            if text: requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": text, "parse_mode":"HTML"}, timeout=10)
             if sticker:
                 time.sleep(0.5)
-                requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendSticker", 
-                                    json={"chat_id": chat_id, "sticker": sticker}, timeout=10)
-        except Exception as e: 
-            print(f"❌ [TG ERROR] {e}", flush=True)
+                requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendSticker", json={"chat_id": chat_id, "sticker": sticker}, timeout=10)
+        except: pass
 
-# ================= CONNECTION =================
 def connect():
     global client
     while True:
         try:
-            print(f"[DEBUG] Syncing with Quotex: {EMAIL}", flush=True)
+            print(f"[DEBUG] Connecting: {EMAIL}", flush=True)
             client = Quotex(email=EMAIL, password=PASSWORD)
             ok, _ = client.connect()
             if ok: 
@@ -65,7 +58,6 @@ def connect():
         except: pass
         time.sleep(10)
 
-# ================= DATA ENGINE =================
 def get_candles(asset):
     try:
         candles = client.get_candles(asset, 60, 100)
@@ -82,7 +74,6 @@ def get_candles(asset):
         return df
     except: return None
 
-# ================= RESULT ENGINE =================
 def verify_strict_result(pair, entry_time, direction):
     target_wait = entry_time + 65
     while int(time.time()) < target_wait: time.sleep(1)
@@ -93,24 +84,18 @@ def verify_strict_result(pair, entry_time, direction):
             if not match.empty:
                 candle = match.iloc[0]
                 o, c = float(candle["open"]), float(candle["close"])
-                print(f"⚖️ [CHECK] {pair} | O: {round(o,6)} | C: {round(c,6)}", flush=True)
+                print(f"⚖️ [RESULT] {pair} | O: {round(o,6)} | C: {round(c,6)}", flush=True)
                 if round(o, 6) == round(c, 6): return "TIE"
                 if direction == "CALL": return "WIN" if c > o else "LOSS"
                 if direction == "PUT": return "WIN" if c < o else "LOSS"
         time.sleep(2)
     return "ERROR"
 
-# ================= TRADE PROCESS =================
 def process_trade(pair, direction, entry_time):
     global trade_active, stats
     asset_label = pair.replace("_otc", "-OTC").upper()
-    print(f"🚀 [SIGNAL] {asset_label} | {direction} triggered @ {entry_time}", flush=True)
-    sys.stdout.flush()
-    
-    send_telegram(text=f"🎯 <b>VIP SIGNAL: {asset_label}</b>\n📊 <b>DIR:</b> {'🟢 CALL' if direction=='CALL' else '🔴 PUT'}\n⏰ <b>TIME:</b> {datetime.fromtimestamp(entry_time, IST).strftime('%H:%M')}", 
-                  sticker=STICKER_CALL if direction=="CALL" else STICKER_PUT)
+    send_telegram(text=f"🎯 <b>VIP SIGNAL: {asset_label}</b>\n📊 <b>DIR:</b> {'🟢 CALL' if direction=='CALL' else '🔴 PUT'}\n⏰ <b>TIME:</b> {datetime.fromtimestamp(entry_time, IST).strftime('%H:%M')}", sticker=STICKER_CALL if direction=="CALL" else STICKER_PUT)
     stats["total"] += 1
-
     res = verify_strict_result(pair, entry_time, direction)
     if res == "WIN":
         stats["win"] += 1
@@ -132,41 +117,31 @@ def process_trade(pair, direction, entry_time):
             send_telegram(text=f"❌ <b>{asset_label} LOSS</b>", sticker=STICKER_LOSS)
     with trade_lock: trade_active = False
 
-# ================= SIGNAL LOOP =================
 def signal_loop():
     global trade_active
     last_min = None
-    print("🚀 [LOOP] Deep-Sync Scanner Started", flush=True)
-    sys.stdout.flush()
-    
     while True:
         now = datetime.now(IST)
-        
-        # Every minute Heartbeat log
         if now.second == 0:
-            print(f"--- ⏰ Heartbeat: Active @ {now.strftime('%H:%M:%S')} ---", flush=True)
+            print(f"--- ⏰ Heartbeat: {now.strftime('%H:%M:%S')} ---", flush=True)
             sys.stdout.flush()
-
-        # 40s Early Entry Scan (at 20th second)
         if now.second == 20: 
             with trade_lock:
                 if trade_active or last_min == now.minute:
                     time.sleep(1); continue
                 last_min = now.minute
-                
-                print(f"🔍 [SCAN] Checking {len(verified_assets)} Assets...", flush=True)
+                print(f"🔍 [SCAN START] Checking {len(verified_assets)} Assets...", flush=True)
                 sys.stdout.flush()
-                
                 for pair in verified_assets:
                     df = get_candles(pair)
-                    if df is None: continue
+                    if df is None:
+                        print(f"   > {pair} | ⚠️ No Data", flush=True)
+                        sys.stdout.flush()
+                        continue
                     last = df.iloc[-1]
                     rsi, e7, e21 = round(last["rsi"], 2), round(last["ema7"], 4), round(last["ema21"], 4)
-                    
-                    # FORCE PRINT EACH PAIR VALUE
                     print(f"   > {pair} | RSI: {rsi} | E7: {e7} | E21: {e21}", flush=True)
                     sys.stdout.flush()
-
                     if rsi > 55 and e7 > e21:
                         trade_active = True
                         Thread(target=process_trade, args=(pair, "CALL", int(last["time"]) + 60)).start()
@@ -177,7 +152,6 @@ def signal_loop():
                         break
         time.sleep(0.5)
 
-# ================= SUMMARY =================
 def summary_loop():
     global stats, last_summary_date
     while True:
@@ -194,7 +168,7 @@ def summary_loop():
 
 if __name__ == "__main__":
     connect() 
-    send_telegram("🚀 **GS Bot Live!**\nScanner logic with Force-Logging activated.")
+    send_telegram("🚀 **GS Bot Live!**\nScanning with RSI 55/45 & Detailed Logs.")
     Thread(target=signal_loop, daemon=True).start()
     Thread(target=summary_loop, daemon=True).start()
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
