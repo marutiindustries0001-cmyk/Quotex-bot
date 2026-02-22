@@ -4,8 +4,7 @@ from threading import Thread, Lock
 from flask import Flask
 from quotexapi.stable_api import Quotex
 
-# ================= 🛠️ SYSTEM PROXY OVERRIDE (THE FIX) =================
-# Ye bot ki har request ko aapke mobile tunnel par redirect kar dega
+# ================= 🛠️ GATEWAY (MOBILE PROXY OPTIMIZED) =================
 PROXY = os.getenv("PROXY_URL") 
 if PROXY:
     os.environ['http_proxy'] = PROXY
@@ -13,7 +12,8 @@ if PROXY:
     os.environ['HTTP_PROXY'] = PROXY
     os.environ['HTTPS_PROXY'] = PROXY
 
-# ================= 🛠️ CONFIG =================
+# ================= 🛠️ CONFIG (IST SYNCED) =================
+IST = pytz.timezone("Asia/Kolkata")
 EMAIL = os.getenv("QUOTEX_EMAIL")
 PASSWORD = os.getenv("QUOTEX_PASSWORD")
 BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -24,63 +24,62 @@ STICKER_PUT = os.getenv("STICKER_PUT")
 STICKER_WIN = os.getenv("STICKER_WIN")
 STICKER_LOSS = os.getenv("STICKER_LOSS")
 
-IST = pytz.timezone("Asia/Kolkata")
 app = Flask(__name__)
 trade_lock = Lock()
-
 client = None
 trade_active = False
 stats = {"win": 0, "loss": 0, "refund": 0, "total": 0}
 last_login_time = datetime.now()
-last_summary_date = None
 
 @app.route("/")
-def health(): return "GS_V17_6_UNIVERSAL_GATEWAY_ACTIVE", 200
+def health(): return "GS_V17_12_EXPANDED_OTC_ACTIVE", 200
 
-# ================= 📊 ALL 22 ASSETS =================
+# ================= 📊 EXPANDED OTC ASSETS (15 PAIRS) =================
 verified_assets = [
-    "EURUSD_otc","GBPUSD_otc","USDJPY_otc","AUDUSD_otc",
-    "EURJPY_otc","GBPJPY_otc","EURGBP_otc","USDCHF_otc",
-    "USDINR_otc","USDBRL_otc","USDTRY_otc",
-    "USDBDT_otc","USDPKR_otc","USDMXN_otc",
-    "EURUSD","GBPUSD","USDJPY","AUDUSD","EURJPY","GBPJPY","EURGBP","USDCHF"
+    "EURUSD_otc", "GBPUSD_otc", "USDJPY_otc", "AUDUSD_otc",
+    "EURJPY_otc", "GBPJPY_otc", "USDINR_otc", "USDBRL_otc",
+    "USDTRY_otc", "EURGBP_otc", "NZDUSD_otc", "GBPCHF_otc",
+    "AUDJPY_otc", "CADJPY_otc", "GBPAUD_otc"
 ]
 
 def send_telegram(text=None, sticker=None):
     if not BOT_TOKEN: return
     for chat_id in CHAT_IDS:
         try:
-            if text: requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": text, "parse_mode":"HTML"}, timeout=10)
+            if text: requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": text, "parse_mode":"HTML"}, timeout=15)
             if sticker:
                 time.sleep(0.5)
-                requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendSticker", json={"chat_id": chat_id, "sticker": sticker}, timeout=10)
+                requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendSticker", json={"chat_id": chat_id, "sticker": sticker}, timeout=15)
         except: pass
 
 def connect():
     global client, last_login_time
-    print(f"[DEBUG] Establishing Connection via System Gateway...", flush=True)
     try:
-        # Proxies ab system level par hain, isliye direct call
         client = Quotex(email=EMAIL, password=PASSWORD)
         ok, _ = client.connect()
         if ok:
             last_login_time = datetime.now()
-            print("✅ [SUCCESS] Session Established via Universal Proxy", flush=True)
+            print(f"✅ [SYNC OK] Server Time: {datetime.now(IST).strftime('%H:%M:%S')}", flush=True)
             return True
-        else:
-            print("❌ [FAILED] Login failed over proxy.", flush=True)
-    except Exception as e:
-        print(f"❌ [CONN ERROR] {e}", flush=True)
+    except: pass
     return False
 
 connect()
 
-def get_candles(asset):
+def get_candles_validated(asset):
     global client
     try:
-        candles = client.get_candles(asset, 60, 60)
-        if candles and len(candles) >= 20:
+        # Fetching 20 candles for speed over mobile proxy
+        candles = client.get_candles(asset, 60, 20)
+        if candles and len(candles) >= 15:
             df = pd.DataFrame(candles)
+            last_candle_time = int(df.iloc[-1]["time"])
+            current_time = int(time.time())
+            
+            # HARD SYNC CHECK: Data fresh hona chahiye
+            if abs(current_time - last_candle_time) > 70:
+                return None
+                
             df["close"] = pd.to_numeric(df["close"])
             df["open"] = pd.to_numeric(df["open"])
             df["ema7"] = df["close"].ewm(span=7, adjust=False).mean()
@@ -93,44 +92,40 @@ def get_candles(asset):
     except: pass
     return None
 
-# (verify_result, process_trade logic remains same as per your approval)
-def verify_result(pair, entry_time, direction):
+def process_trade(pair, direction, entry_time):
+    global trade_active, stats
+    label = pair.replace("_otc", "-OTC").upper()
+    
+    # ⚡ EARLY SIGNAL (approx 35-40 seconds before candle start)
+    send_telegram(text=f"🎯 <b>VIP SIGNAL: {label}</b>\n📊 <b>DIR:</b> {'🟢 CALL' if direction=='CALL' else '🔴 PUT'}\n⏰ TARGET: {datetime.fromtimestamp(entry_time, IST).strftime('%H:%M')}", 
+                  sticker=STICKER_CALL if direction=="CALL" else STICKER_PUT)
+    
     time.sleep(68)
+    
+    res = "ERROR"
     for _ in range(3):
-        df = get_candles(pair)
+        df = get_candles_validated(pair)
         if df is not None:
             match = df[df["time"] == entry_time]
             if not match.empty:
                 o, c = float(match.iloc[0]["open"]), float(match.iloc[0]["close"])
-                print(f"⚖️ [SYNC CHECK] {pair} | O: {round(o,6)} | C: {round(c,6)}", flush=True)
-                if round(o, 6) == round(c, 6): return "TIE"
-                if direction == "CALL": return "WIN" if c > o else "LOSS"
-                else: return "WIN" if c < o else "LOSS"
-        time.sleep(4)
-    return "ERROR"
+                if round(o,6) == round(c,6): res = "TIE"
+                elif direction == "CALL": res = "WIN" if c > o else "LOSS"
+                else: res = "WIN" if c < o else "LOSS"
+                break
+        time.sleep(5)
 
-def process_trade(pair, direction, entry_time):
-    global trade_active, stats
-    label = pair.replace("_otc", "-OTC").upper()
-    send_telegram(text=f"🎯 <b>VIP SIGNAL: {label}</b>\n📊 <b>DIR:</b> {'🟢 CALL' if direction=='CALL' else '🔴 PUT'}\n⏰ {datetime.fromtimestamp(entry_time, IST).strftime('%H:%M')}", 
-                  sticker=STICKER_CALL if direction=="CALL" else STICKER_PUT)
     stats["total"] += 1
-    res = verify_result(pair, entry_time, direction)
     if res == "WIN":
         stats["win"] += 1
         send_telegram(text=f"✅ <b>{label} WIN!</b>", sticker=STICKER_WIN)
     elif res == "TIE":
         stats["refund"] += 1
-        send_telegram(text=f"💸 <b>{label} REFUND</b>")
+        send_telegram(text=f"💸 <b>{label} REFUND (TIE)</b>")
     elif res == "LOSS":
-        send_telegram(text=f"❌ <b>LOSS</b> | 🔁 <b>MTG-1 START</b>")
-        m_res = verify_result(pair, entry_time + 60, direction)
-        if m_res == "WIN":
-            stats["win"] += 1
-            send_telegram(text=f"✅ <b>MTG WIN!</b>", sticker=STICKER_WIN)
-        else:
-            stats["loss"] += 1
-            send_telegram(text=f"❌ <b>MTG LOSS</b>", sticker=STICKER_LOSS)
+        stats["loss"] += 1
+        send_telegram(text=f"❌ <b>{label} LOSS</b>", sticker=STICKER_LOSS)
+
     with trade_lock: trade_active = False
 
 def core_loop():
@@ -138,22 +133,24 @@ def core_loop():
     last_min = None
     while True:
         now = datetime.now(IST)
-        if datetime.now() - last_login_time > timedelta(minutes=20): connect()
+        if datetime.now() - last_login_time > timedelta(minutes=15): connect()
+
+        # SCAN START AT 20th SECOND (This gives 40 seconds buffer)
         if now.second == 20: 
             with trade_lock:
                 if trade_active or last_min == now.minute:
                     time.sleep(1); continue
                 last_min = now.minute
-                print(f"🔍 [SCAN] Checking 22 Assets via Gateway...", flush=True)
+                
+                print(f"🔍 [SCAN] Monitoring 15 OTC Assets @ {now.strftime('%H:%M:%S')}", flush=True)
                 for pair in verified_assets:
-                    time.sleep(1.5)
-                    df = get_candles(pair)
-                    if df is None:
-                        print(f"   > {pair} | ⚠️ Syncing...", flush=True)
-                        continue
+                    time.sleep(1.2) # Throttled for mobile proxy
+                    df = get_candles_validated(pair)
+                    if df is None: continue
+                    
                     l = df.iloc[-1]
                     rsi, e7, e21 = round(l["rsi"], 2), round(l["ema7"], 4), round(l["ema21"], 4)
-                    print(f"   > {pair} | RSI: {rsi} | E7: {e7} | E21: {e21}", flush=True)
+                    
                     if rsi > 55 and e7 > e21:
                         trade_active = True
                         Thread(target=process_trade, args=(pair, "CALL", int(l["time"]) + 60)).start()
@@ -166,5 +163,5 @@ def core_loop():
 
 if __name__ == "__main__":
     Thread(target=lambda: app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)), use_reloader=False)).start()
-    send_telegram("🚀 **GS V17.6 GATEWAY LIVE**")
+    send_telegram("🚀 **GS V17.12 EXPANDED OTC**\n15 Pairs | Mobile Proxy Buffer: 40s")
     core_loop()
